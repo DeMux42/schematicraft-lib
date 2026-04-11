@@ -48,11 +48,21 @@ public class SchematiCraftAPIWrapper {
     public CompletableFuture<Void> loadLibrary() {
         LibraryState state = LibraryState.get();
         state.setLibraryLoading();
+        long start = System.currentTimeMillis();
 
-        return runAsync(() -> createClient().getLibrary()).thenAccept(json -> {
+        return runAsync(() -> {
+            long t0 = System.currentTimeMillis();
+            String json = createClient().getLibrary();
+            LOGGER.info("[perf] library HTTP: {}ms, response: {} chars", System.currentTimeMillis() - t0, json.length());
+            return json;
+        }).thenAccept(json -> {
+            long t0 = System.currentTimeMillis();
             var data = ApiJsonParser.parseLibrary(json);
+            LOGGER.info("[perf] library parse: {}ms, bundles: {}, unbundled: {}", System.currentTimeMillis() - t0, data.bundles().size(), data.unbundled().size());
             state.setLibraryData(data.bundles(), data.unbundled());
+            LOGGER.info("[perf] library total: {}ms", System.currentTimeMillis() - start);
         }).exceptionally(ex -> {
+            LOGGER.info("[perf] library FAILED after {}ms: {}", System.currentTimeMillis() - start, rootMessage(ex));
             state.setLibraryError(rootMessage(ex));
             return null;
         });
@@ -70,8 +80,12 @@ public class SchematiCraftAPIWrapper {
     public CompletableFuture<SchematiCraftAPI.DownloadResult> downloadSchematic(String schematicId) {
         return CompletableFuture.supplyAsync(() -> {
             try {
+                long t0 = System.currentTimeMillis();
                 java.nio.file.Path tempFile = java.nio.file.Files.createTempFile("schematicraft_dl_", ".json");
-                return createClient().download(schematicId, tempFile, "json", "BuildingGadgets", null, null);
+                var result = createClient().download(schematicId, tempFile, "json", "BuildingGadgets", null, null);
+                long size = java.nio.file.Files.size(tempFile);
+                LOGGER.info("[perf] download HTTP: {}ms, file: {} bytes", System.currentTimeMillis() - t0, size);
+                return result;
             } catch (SchematiCraftAPI.AnalysisPendingException e) {
                 throw new RuntimeException("Schematic is still being analyzed. Try again in a moment.");
             } catch (SchematiCraftAPI.QuotaExceededException e) {

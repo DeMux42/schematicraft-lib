@@ -19,5 +19,6 @@ public class SchematiCraftLib {
         initialized = true;
         LOGGER.info("Schematicraft Lib initializing");
         ModConfig.init();
+        com.schematicraft.lib.client.CameraMode.registerEvents();
     }
 }

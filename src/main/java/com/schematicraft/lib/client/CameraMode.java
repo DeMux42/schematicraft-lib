@@ -6,20 +6,23 @@ import com.mojang.logging.LogUtils;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
-import net.neoforged.api.distmarker.Dist;
-import net.neoforged.bus.api.SubscribeEvent;
-import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.InputEvent;
 import net.neoforged.neoforge.client.event.RenderGuiLayerEvent;
+import net.neoforged.neoforge.common.NeoForge;
 import org.slf4j.Logger;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
-@EventBusSubscriber(value = Dist.CLIENT, bus = EventBusSubscriber.Bus.GAME, modid = "schematicraft")
+/**
+ * In-game screenshot capture mode with overlay, debounce, and image cap.
+ * Event handlers are registered manually via registerEvents() rather than
+ * annotation-based, so the lib works regardless of which mod ID it's compiled into.
+ */
 public class CameraMode {
     private static final Logger LOGGER = LogUtils.getLogger();
+    private static boolean eventsRegistered = false;
     private static final int ESC_KEY = 256;
     private static final int CAPTURE_COOLDOWN_TICKS = 20; // 1 second at 20 TPS
     private static final int FLASH_DURATION_TICKS = 15; // ~0.75 seconds
@@ -35,6 +38,15 @@ public class CameraMode {
     private static boolean pendingCapture = false;
     private static long lastCaptureTimeMs = 0; // Debounce based on wall clock, not ticks
     private static final long CAPTURE_COOLDOWN_MS = 1000; // 1 second
+
+    public static void registerEvents() {
+        if (eventsRegistered) return;
+        eventsRegistered = true;
+        NeoForge.EVENT_BUS.addListener(CameraMode::onRenderGuiLayer);
+        NeoForge.EVENT_BUS.addListener(CameraMode::onMouseClick);
+        NeoForge.EVENT_BUS.addListener(CameraMode::onKeyInput);
+        LOGGER.info("CameraMode events registered");
+    }
 
     public static void start(List<Path> images, Runnable finished) {
         if (active) return;
@@ -69,7 +81,6 @@ public class CameraMode {
 
     public static boolean isActive() { return active; }
 
-    @SubscribeEvent
     public static void onRenderGuiLayer(RenderGuiLayerEvent.Post event) {
         if (!active) return;
 
@@ -146,7 +157,6 @@ public class CameraMode {
         }
     }
 
-    @SubscribeEvent
     public static void onMouseClick(InputEvent.MouseButton.Pre event) {
         if (!active) return;
         if (event.getButton() != 0 || event.getAction() != 1) return;
@@ -161,7 +171,6 @@ public class CameraMode {
         pendingCapture = true;
     }
 
-    @SubscribeEvent
     public static void onKeyInput(InputEvent.Key event) {
         if (!active) return;
         if (event.getKey() == ESC_KEY && event.getAction() == 1) {
