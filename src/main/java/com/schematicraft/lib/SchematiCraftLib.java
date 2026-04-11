@@ -2,21 +2,21 @@ package com.schematicraft.lib;
 
 import com.schematicraft.lib.config.ModConfig;
 import com.mojang.logging.LogUtils;
-import net.neoforged.bus.api.IEventBus;
-import net.neoforged.fml.common.Mod;
 import org.slf4j.Logger;
 
 /**
- * Shared Schematicraft library mod.
- * Provides API client, library state, thumbnail cache, camera mode,
- * and UI widgets for all Schematicraft editor integrations.
+ * Shared Schematicraft library. Not a mod itself.
+ * Editor mods call init() from their own mod constructor.
  */
-@Mod(SchematiCraftLib.MODID)
 public class SchematiCraftLib {
     public static final String MODID = "schematicraft_lib";
     public static final Logger LOGGER = LogUtils.getLogger();
 
-    public SchematiCraftLib(IEventBus modEventBus) {
+    private static boolean initialized = false;
+
+    public static void init() {
+        if (initialized) return;
+        initialized = true;
         LOGGER.info("Schematicraft Lib initializing");
         ModConfig.init();
     }

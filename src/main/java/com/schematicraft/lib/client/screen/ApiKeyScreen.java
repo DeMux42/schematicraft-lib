@@ -22,7 +22,7 @@ public class ApiKeyScreen extends Screen {
     private boolean validating = false;
 
     public ApiKeyScreen(@Nullable Screen parent) {
-        super(Component.translatable("screen." + "schematicraft" + ".api_key.title"));
+        super(Component.literal("Schematicraft API Key"));
         this.parent = parent;
     }
 
@@ -32,20 +32,20 @@ public class ApiKeyScreen extends Screen {
         int centerY = this.height / 2;
 
         apiKeyField = new EditBox(this.font, centerX - 120, centerY - 20, 240, 20,
-                Component.translatable("screen." + "schematicraft" + ".api_key.field"));
+                Component.literal("API Key"));
         apiKeyField.setMaxLength(128);
         apiKeyField.setValue(ModConfig.getApiKey());
         apiKeyField.setHint(Component.literal("sk_live_..."));
         this.addRenderableWidget(apiKeyField);
 
         validateButton = Button.builder(
-                Component.translatable("screen." + "schematicraft" + ".api_key.validate"),
+                Component.literal("Validate"),
                 btn -> validateAndSave()
         ).bounds(centerX - 120, centerY + 10, 115, 20).build();
         this.addRenderableWidget(validateButton);
 
         cancelButton = Button.builder(
-                Component.translatable("screen." + "schematicraft" + ".api_key.cancel"),
+                Component.literal("Cancel"),
                 btn -> onClose()
         ).bounds(centerX + 5, centerY + 10, 115, 20).build();
         this.addRenderableWidget(cancelButton);
@@ -109,7 +109,7 @@ public class ApiKeyScreen extends Screen {
         graphics.drawCenteredString(this.font, this.title, centerX, centerY - 50, 0xFFFFFF);
 
         graphics.drawCenteredString(this.font,
-                Component.translatable("screen." + "schematicraft" + ".api_key.instructions"),
+                Component.literal("Enter your API key from schematicraft.com"),
                 centerX, centerY - 38, 0xAAAAAA);
 
         if (!statusMessage.isEmpty()) {
