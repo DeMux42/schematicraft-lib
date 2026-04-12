@@ -57,6 +57,8 @@ public class SchematicListWidget extends ObjectSelectionList<SchematicListWidget
         private final String subtitle;
         private final String thumbnailUrl;
 
+        public String getSchematicId() { return schematicId; }
+
         public SchematicEntry(SchematicListWidget parent, String id, String title, String subtitle) {
             this(parent, id, title, subtitle, null);
         }
