@@ -25,34 +25,54 @@ import java.util.List;
 
 /**
  * Standalone library screen for browsing and loading schematics.
- * Opens via J keybind. 8-column tile grid with bundle tabs, always-active search,
- * and bottom bar with info/actions.
+ * Opens via H keybind or editor GUI buttons. 8-column tile grid with bundle tabs,
+ * always-active search, and bottom bar with info/actions.
  *
  * Accepts a nullable TargetDevice.OpenContext so it can be opened from tables or keybind.
  */
 public class LibraryScreen extends Screen {
     private static final Logger LOGGER = LogUtils.getLogger();
 
-    // Layout constants
+    // --- Layout constants ---
     private static final int COLS = 8;
     private static final int TAB_BAR_H = 20;
+    private static final int TAB_Y_OFFSET = 3;
+    private static final int TAB_H = 14;
+    private static final int TAB_PAD_X = 4;
+    private static final int TAB_PAD_INNER = 8;
+    private static final int TAB_NAME_MAX_LEN = 12;
     private static final int SEARCH_BAR_H = 18;
+    private static final int SEARCH_FIELD_H = 14;
     private static final int BOTTOM_BAR_H = 76;
     private static final int STATUS_BAR_H = 14;
     private static final int GRID_PADDING = 6;
     private static final int TILE_GAP = 3;
     private static final int TILE_NAME_H = 12;
     private static final int SCROLLBAR_W = 6;
+    private static final int SCROLLBAR_MARGIN = 2;
+    private static final int SCROLLBAR_THUMB_MIN_H = 20;
+    private static final int BUNDLE_HEADER_H = 16;
+    private static final int PREVIEW_X = 4;
+    private static final int PREVIEW_W = 100;
+    private static final int INFO_X = 110;
+    private static final int LOAD_BTN_W = 100;
+    private static final int ACTION_BTN_W = 60;
+    private static final int ACTION_BTN_H = 16;
+    private static final int BTN_GAP = 4;
+    private static final int BTN_Y_OFFSET = 40;
+    private static final int TARGET_INFO_MARGIN = 120;
+    private static final int SEARCH_DEBOUNCE_MS = 150;
+    private static final int DOUBLE_CLICK_MS = 400;
 
-    // Computed layout (set in init)
+    // --- Computed layout (set in init) ---
     private int gridTop;
     private int gridBottom;
     private int gridHeight;
     private int gridWidth;
     private int tileSize;
     private int tileTotalH;
-    private int visibleRows;
     private int maxScroll;
+    private int btnY;
 
     // State (persists across init calls / resizes)
     private final GridState gridState = new GridState();
@@ -108,11 +128,11 @@ public class LibraryScreen extends Screen {
         gridWidth = this.width - (GRID_PADDING * 2) - SCROLLBAR_W;
         tileSize = (gridWidth - (TILE_GAP * (COLS - 1))) / COLS;
         tileTotalH = tileSize + TILE_NAME_H;
-        visibleRows = gridHeight / (tileTotalH + TILE_GAP);
+        btnY = gridBottom + BTN_Y_OFFSET;
 
         // Search field (always visible)
         searchField = new EditBox(this.font, GRID_PADDING, TAB_BAR_H + 2,
-                this.width - GRID_PADDING * 2, 14, Component.literal(""));
+                this.width - GRID_PADDING * 2, SEARCH_FIELD_H, Component.literal(""));
         searchField.setMaxLength(100);
         searchField.setHint(Component.literal("Type to filter..."));
         searchField.setValue(gridState.getSearchText());
@@ -145,9 +165,9 @@ public class LibraryScreen extends Screen {
     public void tick() {
         super.tick();
 
-        // Search debounce (150ms for client-side filter)
+        // Search debounce
         if (pendingSearchText != null
-                && System.currentTimeMillis() - lastSearchKeystroke > 150) {
+                && System.currentTimeMillis() - lastSearchKeystroke > SEARCH_DEBOUNCE_MS) {
             gridState.setSearchText(pendingSearchText);
             pendingSearchText = null;
             recomputeMaxScroll();
@@ -160,11 +180,6 @@ public class LibraryScreen extends Screen {
         }
 
         gridState.tickStatus();
-    }
-
-    @Override
-    public void onClose() {
-        super.onClose();
     }
 
     @Override
@@ -214,49 +229,45 @@ public class LibraryScreen extends Screen {
         graphics.fill(0, TAB_BAR_H - 1, this.width, TAB_BAR_H, GuiColors.BORDER_SEPARATOR);
 
         int x = GRID_PADDING;
-        int y = 3;
-        int tabH = 14;
 
         // "All" tab
         boolean allActive = gridState.getActiveBundleIndex() == -1;
-        int allBg = allActive ? GuiColors.BUNDLE_TAB_ACTIVE_BG : 0;
         int allText = allActive ? GuiColors.BUNDLE_TAB_ACTIVE : GuiColors.TEXT_SECONDARY;
         String allLabel = "All";
-        int allW = this.font.width(allLabel) + 8;
-        if (allBg != 0) graphics.fill(x, y, x + allW, y + tabH, allBg);
-        graphics.drawString(this.font, allLabel, x + 4, y + 3, allText, false);
-        if (isOver(mouseX, mouseY, x, y, allW, tabH)) {
+        int allW = this.font.width(allLabel) + TAB_PAD_INNER;
+        if (allActive) graphics.fill(x, TAB_Y_OFFSET, x + allW, TAB_Y_OFFSET + TAB_H, GuiColors.BUNDLE_TAB_ACTIVE_BG);
+        graphics.drawString(this.font, allLabel, x + TAB_PAD_X, TAB_Y_OFFSET + 3, allText, false);
+        if (isOver(mouseX, mouseY, x, TAB_Y_OFFSET, allW, TAB_H)) {
             scheduleTooltip(List.of(
                     Component.literal("All schematics"),
                     Component.literal("\u00a78Ctrl+Tab / Ctrl+Shift+Tab to cycle")
             ), mouseX, mouseY);
         }
-        x += allW + 4;
+        x += allW + TAB_PAD_X;
 
         // Pinned bundle tabs
         List<GridState.BundleTabInfo> pinned = gridState.getPinnedBundles();
         for (int i = 0; i < pinned.size(); i++) {
             GridState.BundleTabInfo tab = pinned.get(i);
             boolean active = gridState.getActiveBundleIndex() == i;
-            int bg = active ? GuiColors.BUNDLE_TAB_ACTIVE_BG : 0;
             int textColor = active ? GuiColors.BUNDLE_TAB_ACTIVE : GuiColors.TEXT_SECONDARY;
 
-            String label = "[" + (i + 1) + "] " + truncate(tab.name(), 12);
-            int tabW = this.font.width(label) + 8;
+            String label = "[" + (i + 1) + "] " + truncate(tab.name(), TAB_NAME_MAX_LEN);
+            int tabW = this.font.width(label) + TAB_PAD_INNER;
 
             if (x + tabW > this.width - GRID_PADDING) break;
 
-            if (bg != 0) graphics.fill(x, y, x + tabW, y + tabH, bg);
-            graphics.drawString(this.font, label, x + 4, y + 3, textColor, false);
+            if (active) graphics.fill(x, TAB_Y_OFFSET, x + tabW, TAB_Y_OFFSET + TAB_H, GuiColors.BUNDLE_TAB_ACTIVE_BG);
+            graphics.drawString(this.font, label, x + TAB_PAD_X, TAB_Y_OFFSET + 3, textColor, false);
 
-            if (isOver(mouseX, mouseY, x, y, tabW, tabH)) {
+            if (isOver(mouseX, mouseY, x, TAB_Y_OFFSET, tabW, TAB_H)) {
                 scheduleTooltip(List.of(
                         Component.literal(tab.name()),
                         Component.literal("\u00a78Ctrl+" + (i + 1) + " to jump")
                 ), mouseX, mouseY);
             }
 
-            x += tabW + 4;
+            x += tabW + TAB_PAD_X;
         }
     }
 
@@ -276,15 +287,15 @@ public class LibraryScreen extends Screen {
                     y += tileTotalH + TILE_GAP;
                     col = 0;
                 }
-                if (y + 16 > gridTop && y < gridBottom) {
+                if (y + BUNDLE_HEADER_H > gridTop && y < gridBottom) {
                     graphics.fill(GRID_PADDING, y + 2,
-                            this.width - GRID_PADDING - SCROLLBAR_W, y + 3 + 12,
+                            this.width - GRID_PADDING - SCROLLBAR_W, y + 2 + TILE_NAME_H,
                             GuiColors.BUNDLE_HEADER_DIM);
                     String headerText = header.name() + " (" + header.count() + ")";
                     graphics.drawString(this.font, headerText,
-                            GRID_PADDING + 4, y + 4, GuiColors.BUNDLE_HEADER, false);
+                            GRID_PADDING + TAB_PAD_X, y + 4, GuiColors.BUNDLE_HEADER, false);
                 }
-                y += 16 + TILE_GAP;
+                y += BUNDLE_HEADER_H + TILE_GAP;
             } else if (entry instanceof GridState.SchematicTileEntry tile) {
                 int tileX = GRID_PADDING + col * (tileSize + TILE_GAP);
                 int tileY = y;
@@ -370,19 +381,17 @@ public class LibraryScreen extends Screen {
     }
 
     private void renderScrollbar(GuiGraphics graphics, int mouseX, int mouseY) {
-        int sbX = this.width - SCROLLBAR_W - 2;
-        int sbTop = gridTop;
-        int sbBottom = gridBottom;
-        int sbHeight = sbBottom - sbTop;
+        int sbX = this.width - SCROLLBAR_W - SCROLLBAR_MARGIN;
+        int sbHeight = gridBottom - gridTop;
 
-        graphics.fill(sbX, sbTop, sbX + SCROLLBAR_W, sbBottom, GuiColors.SCROLLBAR_TRACK);
+        graphics.fill(sbX, gridTop, sbX + SCROLLBAR_W, gridBottom, GuiColors.SCROLLBAR_TRACK);
 
         if (maxScroll <= 0) return;
 
-        int thumbHeight = Math.max(20,
+        int thumbHeight = Math.max(SCROLLBAR_THUMB_MIN_H,
                 (int) ((float) gridHeight / (gridHeight + maxScroll) * sbHeight));
         float scrollRatio = (float) gridState.getScrollOffset() / maxScroll;
-        int thumbY = sbTop + (int) (scrollRatio * (sbHeight - thumbHeight));
+        int thumbY = gridTop + (int) (scrollRatio * (sbHeight - thumbHeight));
 
         boolean thumbHovered = isOver(mouseX, mouseY, sbX, thumbY, SCROLLBAR_W, thumbHeight);
         int thumbColor = thumbHovered
@@ -397,61 +406,57 @@ public class LibraryScreen extends Screen {
         graphics.fill(0, barY, this.width, barY + 1, GuiColors.BORDER_SEPARATOR);
 
         SchematicEntry selected = gridState.getSelectedSchematic();
-        int infoX = 110;
-        int btnY = barY + 40;
 
         // Left: Preview placeholder
-        graphics.fill(4, barY + 4, 104, barY + BOTTOM_BAR_H - 4, 0xFF0A0A0A);
+        int previewRight = PREVIEW_X + PREVIEW_W;
+        graphics.fill(PREVIEW_X, barY + 4, previewRight, barY + BOTTOM_BAR_H - 4, 0xFF0A0A0A);
         if (selected != null) {
             ResourceLocation tex = ThumbnailCache.get().getTexture(
                     selected.id(), selected.thumbnailUrl());
             if (tex != null) {
-                graphics.blit(tex, 5, barY + 5, 0, 0,
-                        98, BOTTOM_BAR_H - 10, 98, BOTTOM_BAR_H - 10);
+                graphics.blit(tex, PREVIEW_X + 1, barY + 5, 0, 0,
+                        PREVIEW_W - 2, BOTTOM_BAR_H - 10, PREVIEW_W - 2, BOTTOM_BAR_H - 10);
             } else {
                 graphics.drawCenteredString(this.font, "Preview",
-                        54, barY + 34, GuiColors.TEXT_DIM);
+                        PREVIEW_X + PREVIEW_W / 2, barY + 34, GuiColors.TEXT_DIM);
             }
         } else {
             graphics.drawCenteredString(this.font, "No selection",
-                    54, barY + 34, GuiColors.TEXT_DIM);
+                    PREVIEW_X + PREVIEW_W / 2, barY + 34, GuiColors.TEXT_DIM);
         }
 
         // Center: Info + Actions
         if (selected != null) {
             String title = selected.title() != null ? selected.title() : "Untitled";
-            graphics.drawString(this.font, title, infoX, barY + 6,
+            graphics.drawString(this.font, title, INFO_X, barY + 6,
                     GuiColors.SELECTED, false);
 
             String bundleId = gridState.getSelectedBundleId();
             String bundleName = bundleId != null ? findBundleName(bundleId) : "Unbundled";
             graphics.drawString(this.font,
                     "\u00a77" + (bundleName != null ? bundleName : ""),
-                    infoX, barY + 18, GuiColors.TEXT_SECONDARY, false);
+                    INFO_X, barY + 18, GuiColors.TEXT_SECONDARY, false);
 
             if (selected.downloadCount() > 0) {
                 graphics.drawString(this.font,
                         "\u00a78" + selected.downloadCount() + " downloads",
-                        infoX, barY + 28, GuiColors.TEXT_DIM, false);
+                        INFO_X, barY + 28, GuiColors.TEXT_DIM, false);
             }
         }
 
         // Load button
-        int loadBtnX = infoX;
-        int loadBtnW = 100;
-        int loadBtnH = 16;
         boolean loadEnabled = selected != null && targetDevice.isAvailable();
         int loadBg = loadEnabled ? GuiColors.BTN_PRIMARY_BG : GuiColors.BTN_BG;
         int loadBorder = loadEnabled ? GuiColors.BTN_PRIMARY_BORDER : GuiColors.BORDER_DARK;
         int loadTextColor = loadEnabled ? GuiColors.BTN_PRIMARY_TEXT : GuiColors.TEXT_DISABLED;
         String loadLabel = targetDevice.getLoadButtonText() + " >";
 
-        graphics.fill(loadBtnX, btnY, loadBtnX + loadBtnW, btnY + loadBtnH, loadBg);
-        drawBorder(graphics, loadBtnX, btnY, loadBtnW, loadBtnH, loadBorder);
+        graphics.fill(INFO_X, btnY, INFO_X + LOAD_BTN_W, btnY + ACTION_BTN_H, loadBg);
+        drawBorder(graphics, INFO_X, btnY, LOAD_BTN_W, ACTION_BTN_H, loadBorder);
         graphics.drawCenteredString(this.font, loadLabel,
-                loadBtnX + loadBtnW / 2, btnY + 4, loadTextColor);
+                INFO_X + LOAD_BTN_W / 2, btnY + 4, loadTextColor);
 
-        if (isOver(mouseX, mouseY, loadBtnX, btnY, loadBtnW, loadBtnH)) {
+        if (isOver(mouseX, mouseY, INFO_X, btnY, LOAD_BTN_W, ACTION_BTN_H)) {
             if (loadEnabled) {
                 scheduleTooltip(List.of(
                         Component.literal(targetDevice.getLoadButtonText()),
@@ -467,16 +472,15 @@ public class LibraryScreen extends Screen {
         }
 
         // Upload button
-        int uploadBtnX = loadBtnX + loadBtnW + 4;
-        int uploadBtnW = 60;
-        graphics.fill(uploadBtnX, btnY, uploadBtnX + uploadBtnW,
-                btnY + loadBtnH, GuiColors.BTN_UPLOAD_BG);
-        drawBorder(graphics, uploadBtnX, btnY, uploadBtnW,
-                loadBtnH, GuiColors.BTN_UPLOAD_BORDER);
+        int uploadBtnX = INFO_X + LOAD_BTN_W + BTN_GAP;
+        graphics.fill(uploadBtnX, btnY, uploadBtnX + ACTION_BTN_W,
+                btnY + ACTION_BTN_H, GuiColors.BTN_UPLOAD_BG);
+        drawBorder(graphics, uploadBtnX, btnY, ACTION_BTN_W,
+                ACTION_BTN_H, GuiColors.BTN_UPLOAD_BORDER);
         graphics.drawCenteredString(this.font, "Upload",
-                uploadBtnX + uploadBtnW / 2, btnY + 4, GuiColors.BTN_UPLOAD_TEXT);
+                uploadBtnX + ACTION_BTN_W / 2, btnY + 4, GuiColors.BTN_UPLOAD_TEXT);
 
-        if (isOver(mouseX, mouseY, uploadBtnX, btnY, uploadBtnW, loadBtnH)) {
+        if (isOver(mouseX, mouseY, uploadBtnX, btnY, ACTION_BTN_W, ACTION_BTN_H)) {
             scheduleTooltip(List.of(
                     Component.literal("Upload schematic"),
                     Component.literal("\u00a78Shortcut: U")
@@ -484,16 +488,15 @@ public class LibraryScreen extends Screen {
         }
 
         // Camera button
-        int camBtnX = uploadBtnX + uploadBtnW + 4;
-        int camBtnW = 60;
-        graphics.fill(camBtnX, btnY, camBtnX + camBtnW,
-                btnY + loadBtnH, GuiColors.BTN_CAMERA_BG);
-        drawBorder(graphics, camBtnX, btnY, camBtnW,
-                loadBtnH, GuiColors.BTN_CAMERA_BORDER);
+        int camBtnX = uploadBtnX + ACTION_BTN_W + BTN_GAP;
+        graphics.fill(camBtnX, btnY, camBtnX + ACTION_BTN_W,
+                btnY + ACTION_BTN_H, GuiColors.BTN_CAMERA_BG);
+        drawBorder(graphics, camBtnX, btnY, ACTION_BTN_W,
+                ACTION_BTN_H, GuiColors.BTN_CAMERA_BORDER);
         graphics.drawCenteredString(this.font, "[C]amera",
-                camBtnX + camBtnW / 2, btnY + 4, GuiColors.BTN_CAMERA_TEXT);
+                camBtnX + ACTION_BTN_W / 2, btnY + 4, GuiColors.BTN_CAMERA_TEXT);
 
-        if (isOver(mouseX, mouseY, camBtnX, btnY, camBtnW, loadBtnH)) {
+        if (isOver(mouseX, mouseY, camBtnX, btnY, ACTION_BTN_W, ACTION_BTN_H)) {
             scheduleTooltip(List.of(
                     Component.literal("Enter camera mode"),
                     Component.literal("\u00a78Take screenshots for upload"),
@@ -502,7 +505,7 @@ public class LibraryScreen extends Screen {
         }
 
         // Right: Target device info
-        int targetX = this.width - 120;
+        int targetX = this.width - TARGET_INFO_MARGIN;
         graphics.drawString(this.font, "Target:", targetX, barY + 6,
                 GuiColors.TEXT_DIM, false);
         if (targetDevice.isAvailable()) {
@@ -680,7 +683,7 @@ public class LibraryScreen extends Screen {
             int tileIdx = getTileIndexAt(mouseX, mouseY);
             if (tileIdx >= 0 && button == 0) {
                 long now = System.currentTimeMillis();
-                if (tileIdx == lastClickIndex && now - lastClickTime < 400) {
+                if (tileIdx == lastClickIndex && now - lastClickTime < DOUBLE_CLICK_MS) {
                     gridState.setSelectedIndex(tileIdx);
                     loadSelectedSchematic();
                     lastClickTime = 0;
@@ -838,53 +841,50 @@ public class LibraryScreen extends Screen {
 
     private void handleTabBarClick(double mouseX, double mouseY, int button) {
         int x = GRID_PADDING;
-        int tabH = 14;
 
         String allLabel = "All";
-        int allW = this.font.width(allLabel) + 8;
-        if (isOver((int) mouseX, (int) mouseY, x, 3, allW, tabH)) {
+        int allW = this.font.width(allLabel) + TAB_PAD_INNER;
+        if (isOver((int) mouseX, (int) mouseY, x, TAB_Y_OFFSET, allW, TAB_H)) {
             gridState.setActiveBundleIndex(-1);
             recomputeMaxScroll();
             return;
         }
-        x += allW + 4;
+        x += allW + TAB_PAD_X;
 
         List<GridState.BundleTabInfo> pinned = gridState.getPinnedBundles();
         for (int i = 0; i < pinned.size(); i++) {
-            String label = "[" + (i + 1) + "] " + truncate(pinned.get(i).name(), 12);
-            int tabW = this.font.width(label) + 8;
-            if (isOver((int) mouseX, (int) mouseY, x, 3, tabW, tabH)) {
+            String label = "[" + (i + 1) + "] " + truncate(pinned.get(i).name(), TAB_NAME_MAX_LEN);
+            int tabW = this.font.width(label) + TAB_PAD_INNER;
+            if (isOver((int) mouseX, (int) mouseY, x, TAB_Y_OFFSET, tabW, TAB_H)) {
                 gridState.setActiveBundleIndex(i);
                 recomputeMaxScroll();
                 return;
             }
-            x += tabW + 4;
+            x += tabW + TAB_PAD_X;
         }
     }
 
     private void handleBottomBarClick(double mouseX, double mouseY, int button) {
-        int barY = this.height - BOTTOM_BAR_H - STATUS_BAR_H;
-        int btnY = barY + 40;
-        int infoX = 110;
-        int loadBtnW = 100;
-        int loadBtnH = 16;
+        int mx = (int) mouseX;
+        int my = (int) mouseY;
 
-        if (isOver((int) mouseX, (int) mouseY, infoX, btnY, loadBtnW, loadBtnH)) {
+        // Load button
+        if (isOver(mx, my, INFO_X, btnY, LOAD_BTN_W, ACTION_BTN_H)) {
             loadSelectedSchematic();
             return;
         }
 
-        int uploadBtnX = infoX + loadBtnW + 4;
-        int uploadBtnW = 60;
-        if (isOver((int) mouseX, (int) mouseY, uploadBtnX, btnY, uploadBtnW, loadBtnH)) {
+        // Upload button
+        int uploadBtnX = INFO_X + LOAD_BTN_W + BTN_GAP;
+        if (isOver(mx, my, uploadBtnX, btnY, ACTION_BTN_W, ACTION_BTN_H)) {
             setStatus("Upload not yet implemented in standalone screen",
                     GuiColors.INFO, 3000);
             return;
         }
 
-        int camBtnX = uploadBtnX + uploadBtnW + 4;
-        int camBtnW = 60;
-        if (isOver((int) mouseX, (int) mouseY, camBtnX, btnY, camBtnW, loadBtnH)) {
+        // Camera button
+        int camBtnX = uploadBtnX + ACTION_BTN_W + BTN_GAP;
+        if (isOver(mx, my, camBtnX, btnY, ACTION_BTN_W, ACTION_BTN_H)) {
             enterCameraMode();
         }
     }
@@ -903,7 +903,7 @@ public class LibraryScreen extends Screen {
                     y += tileTotalH + TILE_GAP;
                     col = 0;
                 }
-                y += 16 + TILE_GAP;
+                y += BUNDLE_HEADER_H + TILE_GAP;
             } else if (entry instanceof GridState.SchematicTileEntry) {
                 int tileX = GRID_PADDING + col * (tileSize + TILE_GAP);
                 int tileY = y;
@@ -950,7 +950,7 @@ public class LibraryScreen extends Screen {
                     y += tileTotalH + TILE_GAP;
                     col = 0;
                 }
-                y += 16 + TILE_GAP;
+                y += BUNDLE_HEADER_H + TILE_GAP;
             } else {
                 col++;
                 if (col >= COLS) {
