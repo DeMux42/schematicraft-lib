@@ -69,8 +69,9 @@ public class LibraryScreen extends Screen {
     private int gridBottom;
     private int gridHeight;
     private int gridWidth;
-    private int tileSize;
-    private int tileTotalH;
+    private int tileSize;    // tile width (also used for column spacing)
+    private int tileThumbH;  // thumbnail height (16:9 aspect ratio)
+    private int tileTotalH;  // thumbnail + name label
     private int maxScroll;
     private int btnY;
 
@@ -127,7 +128,8 @@ public class LibraryScreen extends Screen {
         gridHeight = gridBottom - gridTop;
         gridWidth = this.width - (GRID_PADDING * 2) - SCROLLBAR_W;
         tileSize = (gridWidth - (TILE_GAP * (COLS - 1))) / COLS;
-        tileTotalH = tileSize + TILE_NAME_H;
+        tileThumbH = tileSize * 9 / 16;
+        tileTotalH = tileThumbH + TILE_NAME_H;
         btnY = gridBottom + BTN_Y_OFFSET;
 
         // Search field (always visible)
@@ -333,21 +335,21 @@ public class LibraryScreen extends Screen {
         int border = selected ? GuiColors.TILE_SELECTED_BORDER
                 : (hovered ? GuiColors.TILE_HOVER_BORDER : GuiColors.TILE_BORDER);
 
-        graphics.fill(x, y, x + tileSize, y + tileSize, bg);
-        drawBorder(graphics, x, y, tileSize, tileSize, border);
+        graphics.fill(x, y, x + tileSize, y + tileThumbH, bg);
+        drawBorder(graphics, x, y, tileSize, tileThumbH, border);
 
         // Thumbnail
         ResourceLocation tex = ThumbnailCache.get().getTexture(
                 schematic.id(), schematic.thumbnailUrl());
         if (tex != null) {
             graphics.blit(tex, x + 1, y + 1, 0, 0,
-                    tileSize - 2, tileSize - 2, tileSize - 2, tileSize - 2);
+                    tileSize - 2, tileThumbH - 2, tileSize - 2, tileThumbH - 2);
         } else {
-            graphics.fill(x + 1, y + 1, x + tileSize - 1, y + tileSize - 1, 0xFF0A0A0A);
+            graphics.fill(x + 1, y + 1, x + tileSize - 1, y + tileThumbH - 1, 0xFF0A0A0A);
             int dotCount = (int) ((System.currentTimeMillis() / 500) % 4);
             String dots = ".".repeat(dotCount);
             graphics.drawCenteredString(this.font, dots,
-                    x + tileSize / 2, y + tileSize / 2 - 4, GuiColors.TEXT_DIM);
+                    x + tileSize / 2, y + tileThumbH / 2 - 4, GuiColors.TEXT_DIM);
         }
 
         // Name below thumbnail
@@ -355,7 +357,7 @@ public class LibraryScreen extends Screen {
         String truncated = truncateToWidth(name, tileSize - 4);
         int nameColor = selected ? GuiColors.SELECTED
                 : (hovered ? GuiColors.HOVER_TEXT : GuiColors.TILE_NAME);
-        graphics.drawString(this.font, truncated, x + 2, y + tileSize + 2, nameColor, false);
+        graphics.drawString(this.font, truncated, x + 2, y + tileThumbH + 2, nameColor, false);
 
         // Tooltip on hover
         if (hovered) {
