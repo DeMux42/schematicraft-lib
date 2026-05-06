@@ -102,6 +102,11 @@ public class PaletteScreen extends Screen {
                 .bounds(centerX + 60, btnY, 90, 20).build();
         this.addRenderableWidget(newPaletteButton);
 
+        Button editButton = Button.builder(Component.literal("Edit Copy"),
+                b -> editSelectedPalette())
+                .bounds(centerX + 160, btnY, 70, 20).build();
+        this.addRenderableWidget(editButton);
+
         // Load palettes from API
         if (loading) {
             loadPalettes();
@@ -324,9 +329,16 @@ public class PaletteScreen extends Screen {
     }
 
     private void openPaletteEditor() {
-        // TODO: Phase 3 - open the full palette editor with side-by-side view
-        // For now, show a message
-        LOGGER.info("Palette editor not yet implemented");
+        // Open the palette editor with no base palette (create from scratch)
+        Minecraft.getInstance().setScreen(
+                new PaletteEditorScreen(schematic, targetDevice, null, null));
+    }
+
+    private void editSelectedPalette() {
+        if (selectedIndex < 0 || selectedIndex >= palettes.size()) return;
+        PaletteEntry base = palettes.get(selectedIndex);
+        Minecraft.getInstance().setScreen(
+                new PaletteEditorScreen(schematic, targetDevice, base, null));
     }
 
     // --- Helpers ---
