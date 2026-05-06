@@ -126,8 +126,15 @@ public class PaletteScreen extends Screen {
         }).exceptionally(ex -> {
             Minecraft.getInstance().execute(() -> {
                 loading = false;
-                errorMessage = "Failed to load palettes: " + SchematiCraftAPIWrapper.rootMessage(ex);
-                LOGGER.warn("Palette load failed: {}", errorMessage);
+                String msg = SchematiCraftAPIWrapper.rootMessage(ex);
+                // Treat 404 as "no palettes" (endpoint may not be deployed yet)
+                if (msg.contains("404")) {
+                    palettes = new ArrayList<>();
+                    LOGGER.debug("Palette endpoint not available (404), showing empty list");
+                } else {
+                    errorMessage = "Failed to load palettes: " + msg;
+                    LOGGER.warn("Palette load failed: {}", errorMessage);
+                }
             });
             return null;
         });
