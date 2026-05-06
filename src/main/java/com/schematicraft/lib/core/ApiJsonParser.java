@@ -102,4 +102,59 @@ public class ApiJsonParser {
 
     public record LibraryData(List<BundleEntry> bundles, List<SchematicEntry> unbundled) {}
     public record SearchResultEntry(SchematicEntry schematic, boolean hasMore) {}
+
+    // --- Palette parsing ---
+
+    public static List<PaletteEntry> parsePalettes(String json) {
+        List<PaletteEntry> palettes = new ArrayList<>();
+        JsonElement root = JsonParser.parseString(json);
+
+        // Handle both array response and object-with-array response
+        JsonArray arr;
+        if (root.isJsonArray()) {
+            arr = root.getAsJsonArray();
+        } else if (root.isJsonObject() && root.getAsJsonObject().has("palettes")) {
+            arr = root.getAsJsonObject().getAsJsonArray("palettes");
+        } else {
+            arr = root.isJsonArray() ? root.getAsJsonArray() : new JsonArray();
+        }
+
+        for (JsonElement pe : arr) {
+            palettes.add(parsePalette(pe.getAsJsonObject()));
+        }
+        return palettes;
+    }
+
+    public static PaletteEntry parseSinglePalette(String json) {
+        JsonObject obj = JsonParser.parseString(json).getAsJsonObject();
+        return parsePalette(obj);
+    }
+
+    private static PaletteEntry parsePalette(JsonObject obj) {
+        List<BlockMapping> mappings = new ArrayList<>();
+        JsonArray mappingsArr = obj.getAsJsonArray("mappings");
+        if (mappingsArr != null) {
+            for (JsonElement me : mappingsArr) {
+                JsonObject m = me.getAsJsonObject();
+                mappings.add(new BlockMapping(
+                        str(m, "id") != null ? str(m, "id") : "m-" + mappings.size(),
+                        str(m, "original"),
+                        str(m, "replacement"),
+                        null, null,
+                        !m.has("isValid") || boolVal(m, "isValid")
+                ));
+            }
+        }
+
+        return new PaletteEntry(
+                str(obj, "id"),
+                str(obj, "name"),
+                str(obj, "createdBy"),
+                str(obj, "schematicId"),
+                mappings,
+                str(obj, "visibility") != null ? str(obj, "visibility") : "private",
+                str(obj, "scope") != null ? str(obj, "scope") : "template",
+                intVal(obj, "revision")
+        );
+    }
 }

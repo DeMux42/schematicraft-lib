@@ -141,6 +141,134 @@ public class SchematiCraftAPIWrapper {
         }, executor);
     }
 
+    // --- Palette API methods ---
+
+    public CompletableFuture<java.util.List<com.schematicraft.lib.core.PaletteEntry>> loadPalettes(String schematicId) {
+        return runAsync(() -> {
+            String url = ModConfig.getServerUrl() + "/api/ingame/v1/palettes"
+                    + (schematicId != null ? "?schematicId=" + schematicId : "");
+            String json = httpGet(url);
+            return ApiJsonParser.parsePalettes(json);
+        });
+    }
+
+    public CompletableFuture<com.schematicraft.lib.core.PaletteEntry> createPalette(
+            String name, java.util.List<com.schematicraft.lib.core.BlockMapping> mappings,
+            String schematicId) {
+        return runAsync(() -> {
+            String url = ModConfig.getServerUrl() + "/api/ingame/v1/palettes";
+            StringBuilder body = new StringBuilder();
+            body.append("{\"name\":\"").append(escapeJson(name)).append("\",");
+            body.append("\"visibility\":\"private\",");
+            if (schematicId != null) {
+                body.append("\"schematicId\":\"").append(schematicId).append("\",");
+            }
+            body.append("\"mappings\":[");
+            for (int i = 0; i < mappings.size(); i++) {
+                var m = mappings.get(i);
+                if (i > 0) body.append(",");
+                body.append("{\"original\":\"").append(escapeJson(m.original()))
+                        .append("\",\"replacement\":\"").append(escapeJson(m.replacement())).append("\"}");
+            }
+            body.append("]}");
+            String json = httpPost(url, body.toString());
+            return ApiJsonParser.parseSinglePalette(json);
+        });
+    }
+
+    public CompletableFuture<Void> deletePalette(String paletteId) {
+        return runAsync(() -> {
+            String url = ModConfig.getServerUrl() + "/api/ingame/v1/palettes/" + paletteId;
+            httpDelete(url);
+            return null;
+        });
+    }
+
+    public CompletableFuture<SchematiCraftAPI.DownloadResult> downloadSchematicWithPalette(
+            String schematicId, String paletteId) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                long t0 = System.currentTimeMillis();
+                String url = ModConfig.getServerUrl() + "/api/ingame/v1/schematics/" + schematicId
+                        + "/download?format=json&targetEditor=BuildingGadgets&paletteId=" + paletteId + "&force=true";
+
+                java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder()
+                        .uri(java.net.URI.create(url))
+                        .header("Authorization", "Bearer " + ModConfig.getApiKey())
+                        .header("X-Schematicraft-Client", clientIdentifier)
+                        .GET().build();
+
+                java.nio.file.Path tempFile = java.nio.file.Files.createTempFile("schematicraft_pal_", ".json");
+                java.net.http.HttpResponse<java.nio.file.Path> response = java.net.http.HttpClient.newHttpClient()
+                        .send(request, java.net.http.HttpResponse.BodyHandlers.ofFile(tempFile));
+
+                if (response.statusCode() >= 400) {
+                    String body = java.nio.file.Files.readString(tempFile);
+                    java.nio.file.Files.deleteIfExists(tempFile);
+                    throw new RuntimeException("HTTP " + response.statusCode() + ": " + body);
+                }
+
+                String downloadId = response.headers().firstValue("X-Download-Id").orElse(null);
+                long size = java.nio.file.Files.size(tempFile);
+                LOGGER.info("[perf] download+palette HTTP: {}ms, file: {} bytes, palette: {}",
+                        System.currentTimeMillis() - t0, size, paletteId);
+
+                return new SchematiCraftAPI.DownloadResult(downloadId, tempFile, null);
+            } catch (Exception e) {
+                LOGGER.error("Download with palette failed for {}: {}", schematicId, e.getMessage());
+                throw new RuntimeException(e);
+            }
+        }, executor);
+    }
+
+    private String httpGet(String url) throws Exception {
+        var request = java.net.http.HttpRequest.newBuilder()
+                .uri(java.net.URI.create(url))
+                .header("Authorization", "Bearer " + ModConfig.getApiKey())
+                .header("X-Schematicraft-Client", clientIdentifier)
+                .GET().build();
+        var response = java.net.http.HttpClient.newHttpClient()
+                .send(request, java.net.http.HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() >= 400) {
+            throw new RuntimeException("HTTP " + response.statusCode() + ": " + response.body());
+        }
+        return response.body();
+    }
+
+    private String httpPost(String url, String jsonBody) throws Exception {
+        var request = java.net.http.HttpRequest.newBuilder()
+                .uri(java.net.URI.create(url))
+                .header("Authorization", "Bearer " + ModConfig.getApiKey())
+                .header("Content-Type", "application/json")
+                .header("X-Schematicraft-Client", clientIdentifier)
+                .POST(java.net.http.HttpRequest.BodyPublishers.ofString(jsonBody)).build();
+        var response = java.net.http.HttpClient.newHttpClient()
+                .send(request, java.net.http.HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() >= 400) {
+            throw new RuntimeException("HTTP " + response.statusCode() + ": " + response.body());
+        }
+        return response.body();
+    }
+
+    private void httpDelete(String url) throws Exception {
+        var request = java.net.http.HttpRequest.newBuilder()
+                .uri(java.net.URI.create(url))
+                .header("Authorization", "Bearer " + ModConfig.getApiKey())
+                .header("X-Schematicraft-Client", clientIdentifier)
+                .DELETE().build();
+        var response = java.net.http.HttpClient.newHttpClient()
+                .send(request, java.net.http.HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() >= 400 && response.statusCode() != 404) {
+            throw new RuntimeException("HTTP " + response.statusCode() + ": " + response.body());
+        }
+    }
+
+    private static String escapeJson(String s) {
+        if (s == null) return "";
+        return s.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\n", "\\n").replace("\r", "\\r");
+    }
+
     public static String rootMessage(Throwable ex) {
         Throwable c = ex;
         while (c.getCause() != null) c = c.getCause();

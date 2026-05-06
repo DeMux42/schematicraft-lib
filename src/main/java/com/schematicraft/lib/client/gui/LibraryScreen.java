@@ -506,6 +506,26 @@ public class LibraryScreen extends Screen {
             ), mouseX, mouseY);
         }
 
+        // Palette button
+        int palBtnX = camBtnX + ACTION_BTN_W + BTN_GAP;
+        boolean palEnabled = selected != null;
+        int palBg = palEnabled ? 0xFF1A1A2A : GuiColors.BTN_BG;
+        int palBorder = palEnabled ? 0xFF3A3A5A : GuiColors.BORDER_DARK;
+        int palText = palEnabled ? 0xFFAAAAFF : GuiColors.TEXT_DISABLED;
+        graphics.fill(palBtnX, btnY, palBtnX + ACTION_BTN_W,
+                btnY + ACTION_BTN_H, palBg);
+        drawBorder(graphics, palBtnX, btnY, ACTION_BTN_W,
+                ACTION_BTN_H, palBorder);
+        graphics.drawCenteredString(this.font, "Palette",
+                palBtnX + ACTION_BTN_W / 2, btnY + 4, palText);
+
+        if (isOver(mouseX, mouseY, palBtnX, btnY, ACTION_BTN_W, ACTION_BTN_H)) {
+            scheduleTooltip(List.of(
+                    Component.literal("Change block palette"),
+                    Component.literal("\u00a78Swap blocks before loading")
+            ), mouseX, mouseY);
+        }
+
         // Right: Target device info
         int targetX = this.width - TARGET_INFO_MARGIN;
         graphics.drawString(this.font, "Target:", targetX, barY + 6,
@@ -817,6 +837,12 @@ public class LibraryScreen extends Screen {
         loadHandler = handler;
     }
 
+    /** Get the registered load handler (used by PaletteScreen). */
+    @Nullable
+    public static LoadHandler getLoadHandler() {
+        return loadHandler;
+    }
+
     private void enterCameraMode() {
         SchematicEntry selected = gridState.getSelectedSchematic();
         if (selected == null) {
@@ -835,6 +861,15 @@ public class LibraryScreen extends Screen {
                 Minecraft.getInstance().setScreen(new LibraryScreen());
             });
         });
+    }
+
+    private void openPaletteScreen() {
+        SchematicEntry selected = gridState.getSelectedSchematic();
+        if (selected == null) {
+            setStatus("Select a schematic first", GuiColors.WARNING, 2000);
+            return;
+        }
+        Minecraft.getInstance().setScreen(new PaletteScreen(selected, targetDevice));
     }
 
     // --------------------------------------------------
@@ -888,6 +923,13 @@ public class LibraryScreen extends Screen {
         int camBtnX = uploadBtnX + ACTION_BTN_W + BTN_GAP;
         if (isOver(mx, my, camBtnX, btnY, ACTION_BTN_W, ACTION_BTN_H)) {
             enterCameraMode();
+            return;
+        }
+
+        // Palette button
+        int palBtnX = camBtnX + ACTION_BTN_W + BTN_GAP;
+        if (isOver(mx, my, palBtnX, btnY, ACTION_BTN_W, ACTION_BTN_H)) {
+            openPaletteScreen();
         }
     }
 
