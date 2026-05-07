@@ -336,16 +336,33 @@ public class PaletteScreen extends Screen {
     }
 
     private void openPaletteEditor() {
-        // Open the palette editor with no base palette (create from scratch)
-        Minecraft.getInstance().setScreen(
-                new PaletteEditorScreen(schematic, targetDevice, null, null));
+        openEditorCallback(schematic, targetDevice, null);
     }
 
     private void editSelectedPalette() {
         if (selectedIndex < 0 || selectedIndex >= palettes.size()) return;
-        PaletteEntry base = palettes.get(selectedIndex);
-        Minecraft.getInstance().setScreen(
-                new PaletteEditorScreen(schematic, targetDevice, base, null));
+        openEditorCallback(schematic, targetDevice, palettes.get(selectedIndex));
+    }
+
+    /** Editor opener callback. Set by the editor mod at startup. */
+    private static PaletteEditorOpener editorOpener = null;
+
+    @FunctionalInterface
+    public interface PaletteEditorOpener {
+        void open(SchematicEntry schematic, TargetDevice target, @Nullable PaletteEntry base);
+    }
+
+    public static void setEditorOpener(PaletteEditorOpener opener) {
+        editorOpener = opener;
+    }
+
+    private static void openEditorCallback(SchematicEntry schematic, TargetDevice target,
+                                            @Nullable PaletteEntry base) {
+        if (editorOpener != null) {
+            editorOpener.open(schematic, target, base);
+        } else {
+            LOGGER.warn("No palette editor opener registered");
+        }
     }
 
     // --- Helpers ---
