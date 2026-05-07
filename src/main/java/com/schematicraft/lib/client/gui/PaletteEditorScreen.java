@@ -56,6 +56,7 @@ public class PaletteEditorScreen extends Screen {
     // Block search popup
     private boolean searchOpen = false;
     private int searchTargetRow = -1;
+    private boolean searchEditingOriginal = false;
     private EditBox searchField;
     private List<String> searchResults = new ArrayList<>();
     private int searchSelectedIdx = 0;
@@ -142,6 +143,12 @@ public class PaletteEditorScreen extends Screen {
                 b -> savePalette())
                 .bounds(centerX - 40, btnY, 100, 20).build();
         this.addRenderableWidget(saveButton);
+
+        // Add Mapping button (allows adding rows when starting from scratch)
+        Button addMappingButton = Button.builder(Component.literal("+ Add Block"),
+                b -> addEmptyMapping())
+                .bounds(centerX + 70, btnY, 80, 20).build();
+        this.addRenderableWidget(addMappingButton);
 
         // Search field (hidden until popup opens)
         searchField = new EditBox(this.font, 0, 0, SEARCH_POPUP_W - 4, 14, Component.literal(""));
@@ -291,14 +298,22 @@ public class PaletteEditorScreen extends Screen {
             return true;
         }
 
-        // Check if clicking a replacement cell
+        // Check if clicking a replacement cell OR original cell
         int rowsTop = HEADER_H + 4 + 14;
+        int colOrigX = PADDING + 4;
         int colReplX = this.width / 2 + 10;
-        if (mouseX >= colReplX && mouseY >= rowsTop && mouseY < this.height - FOOTER_H) {
+        if (mouseY >= rowsTop && mouseY < this.height - FOOTER_H) {
             int rowIdx = ((int) mouseY - rowsTop + scrollOffset) / ROW_H;
             if (rowIdx >= 0 && rowIdx < mappingRows.size()) {
-                openSearchForRow(rowIdx, (int) mouseX, (int) mouseY);
-                return true;
+                if (mouseX >= colReplX) {
+                    searchEditingOriginal = false;
+                    openSearchForRow(rowIdx, (int) mouseX, (int) mouseY);
+                    return true;
+                } else if (mouseX >= colOrigX && mouseX < colReplX) {
+                    searchEditingOriginal = true;
+                    openSearchForRow(rowIdx, (int) mouseX, (int) mouseY);
+                    return true;
+                }
             }
         }
 
@@ -371,8 +386,13 @@ public class PaletteEditorScreen extends Screen {
     private void applySearchResult(String blockName) {
         if (searchTargetRow >= 0 && searchTargetRow < mappingRows.size()) {
             MappingRow row = mappingRows.get(searchTargetRow);
-            row.replacement = blockName;
-            row.replacementDisplay = MappingRow.shortName(blockName);
+            if (searchEditingOriginal) {
+                row.original = blockName;
+                row.originalDisplay = MappingRow.shortName(blockName);
+            } else {
+                row.replacement = blockName;
+                row.replacementDisplay = MappingRow.shortName(blockName);
+            }
         }
         closeSearch();
     }
@@ -418,6 +438,15 @@ public class PaletteEditorScreen extends Screen {
     }
 
     // --- Actions ---
+
+    private void addEmptyMapping() {
+        // Open search popup to pick the "original" block, then add a row
+        // For simplicity, add a placeholder row that the user can edit
+        mappingRows.add(new MappingRow("minecraft:stone", "minecraft:stone"));
+        recomputeScroll();
+        // Auto-scroll to bottom to show the new row
+        scrollOffset = maxScroll;
+    }
 
     private void savePalette() {
         String name = nameField.getValue().trim();
