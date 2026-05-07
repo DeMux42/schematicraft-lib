@@ -781,6 +781,10 @@ public class LibraryScreen extends Screen {
                     byte[] data = Files.readAllBytes(result.file);
                     Files.deleteIfExists(result.file);
 
+                    // Cache the downloaded data for palette editing
+                    com.schematicraft.lib.core.SchematicDataCache.get()
+                            .put(selected.id(), data);
+
                     boolean success = dispatchLoad(data);
                     if (success) {
                         String title = selected.title() != null

@@ -336,12 +336,55 @@ public class PaletteScreen extends Screen {
     }
 
     private void openPaletteEditor() {
-        openEditorCallback(schematic, targetDevice, null);
+        // Download schematic (or use cache) to extract block list, then open editor
+        openEditorWithBlocks(null);
     }
 
     private void editSelectedPalette() {
         if (selectedIndex < 0 || selectedIndex >= palettes.size()) return;
-        openEditorCallback(schematic, targetDevice, palettes.get(selectedIndex));
+        openEditorWithBlocks(palettes.get(selectedIndex));
+    }
+
+    private void openEditorWithBlocks(@Nullable PaletteEntry base) {
+        var cache = com.schematicraft.lib.core.SchematicDataCache.get();
+
+        if (cache.has(schematic.id())) {
+            // Already cached, extract blocks and open immediately
+            List<String> blocks = cache.extractBlockList(schematic.id());
+            doOpenEditor(base, blocks);
+        } else {
+            // Need to download first
+            loading = true;
+            SchematiCraftAPIWrapper.get().downloadSchematic(schematic.id()).thenAccept(result -> {
+                Minecraft.getInstance().execute(() -> {
+                    try {
+                        byte[] data = java.nio.file.Files.readAllBytes(result.file);
+                        java.nio.file.Files.deleteIfExists(result.file);
+                        cache.put(schematic.id(), data);
+                        List<String> blocks = com.schematicraft.lib.core.SchematicDataCache
+                                .extractBlockListFromData(data);
+                        doOpenEditor(base, blocks);
+                    } catch (Exception e) {
+                        loading = false;
+                        errorMessage = "Failed to load schematic: " + e.getMessage();
+                    }
+                });
+            }).exceptionally(ex -> {
+                Minecraft.getInstance().execute(() -> {
+                    loading = false;
+                    errorMessage = "Download failed: " + SchematiCraftAPIWrapper.rootMessage(ex);
+                });
+                return null;
+            });
+        }
+    }
+
+    private void doOpenEditor(@Nullable PaletteEntry base, List<String> schematicBlocks) {
+        if (editorOpener != null) {
+            editorOpener.open(schematic, targetDevice, base, schematicBlocks);
+        } else {
+            LOGGER.warn("No palette editor opener registered");
+        }
     }
 
     /** Editor opener callback. Set by the editor mod at startup. */
@@ -349,20 +392,12 @@ public class PaletteScreen extends Screen {
 
     @FunctionalInterface
     public interface PaletteEditorOpener {
-        void open(SchematicEntry schematic, TargetDevice target, @Nullable PaletteEntry base);
+        void open(SchematicEntry schematic, TargetDevice target,
+                  @Nullable PaletteEntry base, @Nullable List<String> schematicBlocks);
     }
 
     public static void setEditorOpener(PaletteEditorOpener opener) {
         editorOpener = opener;
-    }
-
-    private static void openEditorCallback(SchematicEntry schematic, TargetDevice target,
-                                            @Nullable PaletteEntry base) {
-        if (editorOpener != null) {
-            editorOpener.open(schematic, target, base);
-        } else {
-            LOGGER.warn("No palette editor opener registered");
-        }
     }
 
     // --- Helpers ---
