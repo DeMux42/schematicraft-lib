@@ -833,6 +833,10 @@ public class LibraryScreen extends Screen {
                     com.schematicraft.lib.core.SchematicDataCache.get()
                             .put(selected.id(), data);
 
+                    // DEBUG: dump first 500 chars of downloaded data
+                    String preview = new String(data, 0, Math.min(data.length, 500));
+                    LOGGER.info("[DEBUG] Downloaded JSON preview: {}", preview);
+
                     boolean success = dispatchLoad(data);
                     if (success) {
                         String title = selected.title() != null
