@@ -78,13 +78,20 @@ public class SchematiCraftAPIWrapper {
     }
 
     public CompletableFuture<SchematiCraftAPI.DownloadResult> downloadSchematic(String schematicId) {
+        return downloadSchematic(schematicId, "json", "BuildingGadgets");
+    }
+
+    public CompletableFuture<SchematiCraftAPI.DownloadResult> downloadSchematic(
+            String schematicId, String format, String targetEditor) {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 long t0 = System.currentTimeMillis();
-                java.nio.file.Path tempFile = java.nio.file.Files.createTempFile("schematicraft_dl_", ".json");
-                var result = createClient().download(schematicId, tempFile, "json", "BuildingGadgets", null, null);
+                String ext = format != null ? format : "json";
+                java.nio.file.Path tempFile = java.nio.file.Files.createTempFile("schematicraft_dl_", "." + ext);
+                var result = createClient().download(schematicId, tempFile, format, targetEditor, null, null);
                 long size = java.nio.file.Files.size(tempFile);
-                LOGGER.info("[perf] download HTTP: {}ms, file: {} bytes", System.currentTimeMillis() - t0, size);
+                LOGGER.info("[perf] download HTTP: {}ms, file: {} bytes, format: {}",
+                        System.currentTimeMillis() - t0, size, format);
                 return result;
             } catch (SchematiCraftAPI.AnalysisPendingException e) {
                 throw new RuntimeException("Schematic is still being analyzed. Try again in a moment.");

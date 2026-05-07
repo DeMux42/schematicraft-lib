@@ -68,6 +68,24 @@ public class TargetDevice {
         };
     }
 
+    /** Get the download format for this target device. */
+    public String getDownloadFormat() {
+        return switch (type) {
+            case BG2_GADGET, BG2_TEMPLATE_MANAGER -> "json";
+            case CREATE_SCHEMATIC_TABLE -> "nbt";
+            case NONE -> "json"; // Default to BG2 JSON for preview
+        };
+    }
+
+    /** Get the target editor name for the download API. */
+    public String getDownloadEditor() {
+        return switch (type) {
+            case BG2_GADGET, BG2_TEMPLATE_MANAGER -> "BuildingGadgets";
+            case CREATE_SCHEMATIC_TABLE -> "Create";
+            case NONE -> "BuildingGadgets";
+        };
+    }
+
     /**
      * Resolve the target device based on current context.
      *

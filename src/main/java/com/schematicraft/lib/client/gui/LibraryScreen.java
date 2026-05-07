@@ -104,6 +104,9 @@ public class LibraryScreen extends Screen {
     private List<Component> pendingTooltip = null;
     private int tooltipX, tooltipY;
 
+    // Preview expand overlay
+    private boolean previewExpanded = false;
+
     public LibraryScreen(@Nullable TargetDevice.OpenContext openContext) {
         super(Component.literal("Schematicraft Library"));
         this.targetDevice = TargetDevice.resolve(openContext);
@@ -216,9 +219,12 @@ public class LibraryScreen extends Screen {
         renderStatusBar(graphics);
 
         // Tooltips drawn last (on top of everything)
-        if (pendingTooltip != null) {
+        if (pendingTooltip != null && !previewExpanded) {
             graphics.renderComponentTooltip(this.font, pendingTooltip, tooltipX, tooltipY);
         }
+
+        // Preview expand overlay (on top of everything)
+        renderPreviewOverlay(graphics, mouseX, mouseY);
     }
 
     @Override
@@ -409,18 +415,34 @@ public class LibraryScreen extends Screen {
 
         SchematicEntry selected = gridState.getSelectedSchematic();
 
-        // Left: Preview placeholder
+        // Left: Preview area (progressive: thumbnail -> 3D render when cached)
         int previewRight = PREVIEW_X + PREVIEW_W;
-        graphics.fill(PREVIEW_X, barY + 4, previewRight, barY + BOTTOM_BAR_H - 4, 0xFF0A0A0A);
+        int previewTop = barY + 4;
+        int previewH = BOTTOM_BAR_H - 8;
+        graphics.fill(PREVIEW_X, previewTop, previewRight, previewTop + previewH, 0xFF0A0A0A);
+
         if (selected != null) {
-            ResourceLocation tex = ThumbnailCache.get().getTexture(
-                    selected.id(), selected.thumbnailUrl());
-            if (tex != null) {
-                graphics.blit(tex, PREVIEW_X + 1, barY + 5, 0, 0,
-                        PREVIEW_W - 2, BOTTOM_BAR_H - 10, PREVIEW_W - 2, BOTTOM_BAR_H - 10);
+            var cache = com.schematicraft.lib.core.SchematicDataCache.get();
+            var renderer = com.schematicraft.lib.client.preview.SchematicPreviewRenderer.get();
+
+            if (cache.has(selected.id())) {
+                // 3D render: parse and prepare if needed
+                ensurePreviewPrepared(selected.id());
+                if (renderer.isReady()) {
+                    graphics.flush();
+                    renderer.renderAutoRotate(graphics, PREVIEW_X + 1, previewTop + 1,
+                            PREVIEW_W - 2, previewH - 2);
+                } else {
+                    renderThumbnailPreview(graphics, selected, previewTop, previewH);
+                }
             } else {
-                graphics.drawCenteredString(this.font, "Preview",
-                        PREVIEW_X + PREVIEW_W / 2, barY + 34, GuiColors.TEXT_DIM);
+                renderThumbnailPreview(graphics, selected, previewTop, previewH);
+            }
+
+            // Click hint on hover
+            if (isOver(mouseX, mouseY, PREVIEW_X, previewTop, PREVIEW_W, previewH)) {
+                drawBorder(graphics, PREVIEW_X, previewTop, PREVIEW_W, previewH, GuiColors.SELECTED);
+                scheduleTooltip(List.of(Component.literal("Click to expand")), mouseX, mouseY);
             }
         } else {
             graphics.drawCenteredString(this.font, "No selection",
@@ -583,6 +605,10 @@ public class LibraryScreen extends Screen {
 
         // Layered Esc
         if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
+            if (previewExpanded) {
+                previewExpanded = false;
+                return true;
+            }
             if (searchField != null && searchField.isFocused()
                     && !searchField.getValue().isEmpty()) {
                 searchField.setValue("");
@@ -693,6 +719,12 @@ public class LibraryScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        // Expanded preview: click anywhere to close
+        if (previewExpanded) {
+            previewExpanded = false;
+            return true;
+        }
+
         // Tab bar clicks
         if (mouseY < TAB_BAR_H) {
             handleTabBarClick(mouseX, mouseY, button);
@@ -730,6 +762,10 @@ public class LibraryScreen extends Screen {
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY,
                                   double scrollX, double scrollY) {
+        if (previewExpanded) {
+            com.schematicraft.lib.client.preview.SchematicPreviewRenderer.get().zoom((float) scrollY);
+            return true;
+        }
         if (mouseY >= gridTop && mouseY < gridBottom) {
             int scrollAmount = (int) (-scrollY * (tileTotalH + TILE_GAP));
             gridState.scroll(scrollAmount);
@@ -737,6 +773,17 @@ public class LibraryScreen extends Screen {
             return true;
         }
         return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+    }
+
+    @Override
+    public boolean mouseDragged(double mouseX, double mouseY, int button,
+                                 double dragX, double dragY) {
+        if (previewExpanded && button == 0) {
+            com.schematicraft.lib.client.preview.SchematicPreviewRenderer.get()
+                    .drag((float) dragX, (float) dragY);
+            return true;
+        }
+        return super.mouseDragged(mouseX, mouseY, button, dragX, dragY);
     }
 
     // --------------------------------------------------
@@ -774,7 +821,8 @@ public class LibraryScreen extends Screen {
         }
 
         setStatus("Downloading...", GuiColors.INFO, 0);
-        SchematiCraftAPIWrapper.get().downloadSchematic(selected.id())
+        SchematiCraftAPIWrapper.get().downloadSchematic(
+                selected.id(), targetDevice.getDownloadFormat(), targetDevice.getDownloadEditor())
                 .thenAccept(result -> {
             Minecraft.getInstance().execute(() -> {
                 try {
@@ -908,6 +956,15 @@ public class LibraryScreen extends Screen {
     private void handleBottomBarClick(double mouseX, double mouseY, int button) {
         int mx = (int) mouseX;
         int my = (int) mouseY;
+        int barY2 = this.height - BOTTOM_BAR_H - STATUS_BAR_H;
+
+        // Preview area click (expand)
+        int previewTop = barY2 + 4;
+        int previewH = BOTTOM_BAR_H - 8;
+        if (isOver(mx, my, PREVIEW_X, previewTop, PREVIEW_W, previewH)) {
+            togglePreviewExpand();
+            return;
+        }
 
         // Load button
         if (isOver(mx, my, INFO_X, btnY, LOAD_BTN_W, ACTION_BTN_H)) {
@@ -1010,6 +1067,75 @@ public class LibraryScreen extends Screen {
         if (col > 0) y += tileTotalH + TILE_GAP;
         maxScroll = Math.max(0, y - gridHeight);
         gridState.clampScroll(maxScroll);
+    }
+
+    // --------------------------------------------------
+    // Utility
+    // --------------------------------------------------
+    // Preview Helpers
+    // --------------------------------------------------
+
+    private String lastPreparedSchematicId = null;
+
+    private void togglePreviewExpand() {
+        previewExpanded = !previewExpanded;
+        if (previewExpanded) {
+            com.schematicraft.lib.client.preview.SchematicPreviewRenderer.get().resetView();
+        }
+    }
+
+    private void renderPreviewOverlay(GuiGraphics graphics, int mouseX, int mouseY) {
+        if (!previewExpanded) return;
+
+        var renderer = com.schematicraft.lib.client.preview.SchematicPreviewRenderer.get();
+        if (!renderer.isReady()) { previewExpanded = false; return; }
+
+        // Dim background
+        graphics.fill(0, 0, this.width, this.height, 0xC0000000);
+
+        // Large preview area (60% of screen, centered)
+        int pw = (int) (this.width * 0.6);
+        int ph = (int) (this.height * 0.6);
+        int px = (this.width - pw) / 2;
+        int py = (this.height - ph) / 2;
+
+        graphics.fill(px - 2, py - 2, px + pw + 2, py + ph + 2, GuiColors.BORDER_SEPARATOR);
+        graphics.fill(px, py, px + pw, py + ph, 0xFF0A0A0A);
+
+        graphics.flush();
+        renderer.renderInteractive(graphics, px, py, pw, ph);
+
+        // Instructions
+        graphics.drawCenteredString(this.font, "Drag to rotate, scroll to zoom, click/Esc to close",
+                this.width / 2, py + ph + 8, GuiColors.TEXT_DIM);
+    }
+
+    private void ensurePreviewPrepared(String schematicId) {
+        if (schematicId.equals(lastPreparedSchematicId)) return;
+
+        var cache = com.schematicraft.lib.core.SchematicDataCache.get();
+        byte[] data = cache.get(schematicId);
+        if (data == null) return;
+
+        var previewData = com.schematicraft.lib.client.preview.PreviewDataParser.parse(data);
+        if (previewData == null) return;
+
+        com.schematicraft.lib.client.preview.SchematicPreviewRenderer.get()
+                .prepare(previewData, schematicId);
+        lastPreparedSchematicId = schematicId;
+    }
+
+    private void renderThumbnailPreview(GuiGraphics graphics, SchematicEntry selected,
+                                         int previewTop, int previewH) {
+        ResourceLocation tex = ThumbnailCache.get().getTexture(
+                selected.id(), selected.thumbnailUrl());
+        if (tex != null) {
+            graphics.blit(tex, PREVIEW_X + 1, previewTop + 1, 0, 0,
+                    PREVIEW_W - 2, previewH - 2, PREVIEW_W - 2, previewH - 2);
+        } else {
+            graphics.drawCenteredString(this.font, "Preview",
+                    PREVIEW_X + PREVIEW_W / 2, previewTop + previewH / 2 - 4, GuiColors.TEXT_DIM);
+        }
     }
 
     // --------------------------------------------------
