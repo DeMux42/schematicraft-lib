@@ -241,7 +241,7 @@ public class PaletteScreen extends Screen {
             BlockMapping m = mappings.get(i);
             String from = shortBlockName(m.original());
             String to = shortBlockName(m.replacement());
-            String line = from + " > " + to;
+            String line = from + " to " + to;
             graphics.drawString(this.font, truncate(line, cardW - 8),
                     x + 4, mappingY + i * MAPPING_ROW_H, GuiColors.TEXT_SECONDARY, false);
         }
@@ -311,10 +311,15 @@ public class PaletteScreen extends Screen {
                     byte[] data = java.nio.file.Files.readAllBytes(result.file);
                     java.nio.file.Files.deleteIfExists(result.file);
 
-                    if (LibraryScreen.getLoadHandler() != null
-                            && LibraryScreen.getLoadHandler().load(targetDevice, data)) {
-                        SchematiCraftAPIWrapper.get().submitSuccessFeedback(result.downloadId);
-                        Minecraft.getInstance().setScreen(null);
+                    if (LibraryScreen.getLoadHandler() != null) {
+                        var loadResult = LibraryScreen.getLoadHandler().load(targetDevice, data);
+                        if (loadResult.success()) {
+                            SchematiCraftAPIWrapper.get().submitSuccessFeedback(result.downloadId);
+                            Minecraft.getInstance().setScreen(null);
+                        } else {
+                            applyButton.setMessage(Component.literal("Load failed"));
+                            applyButton.active = true;
+                        }
                     } else {
                         applyButton.setMessage(Component.literal("Load failed"));
                         applyButton.active = true;
@@ -448,12 +453,5 @@ public class PaletteScreen extends Screen {
         graphics.fill(x, y + h - 1, x + w, y + h, color);
         graphics.fill(x, y, x + 1, y + h, color);
         graphics.fill(x + w - 1, y, x + w, y + h, color);
-    }
-
-    // --- Public accessor for LoadHandler ---
-
-    @Nullable
-    private static LibraryScreen.LoadHandler getLoadHandler() {
-        return LibraryScreen.getLoadHandler();
     }
 }

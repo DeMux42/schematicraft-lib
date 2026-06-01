@@ -208,7 +208,7 @@ public class GridState {
         return count;
     }
 
-    /** Move selection by delta in the grid (handles row wrapping). */
+    /** Move selection by delta in the grid (handles row wrapping and bundle headers). */
     public void moveSelection(int cols, int dx, int dy) {
         int count = getSchematicCount();
         if (count == 0) return;
@@ -218,9 +218,106 @@ public class GridState {
             return;
         }
 
-        int newIndex = selectedIndex + dx + (dy * cols);
-        if (newIndex >= 0 && newIndex < count) {
-            selectedIndex = newIndex;
+        // For left/right within a row, flat offset works fine
+        if (dy == 0) {
+            int newIndex = selectedIndex + dx;
+            if (newIndex >= 0 && newIndex < count) {
+                selectedIndex = newIndex;
+            }
+            return;
+        }
+
+        // For up/down, we need visual position awareness.
+        // Walk the display list to find the visual (row, col) of each schematic,
+        // accounting for bundle headers resetting the column counter.
+
+        int col = 0;
+        int row = 0;
+        int schematicIdx = 0;
+        int[] rows = new int[count];
+        int[] colsArr = new int[count];
+
+        for (DisplayEntry entry : displayList) {
+            if (entry instanceof BundleHeaderEntry) {
+                if (col > 0) {
+                    row++;
+                    col = 0;
+                }
+                row++; // The header itself occupies a row
+            } else if (entry instanceof SchematicTileEntry) {
+                rows[schematicIdx] = row;
+                colsArr[schematicIdx] = col;
+                schematicIdx++;
+
+                col++;
+                if (col >= cols) {
+                    col = 0;
+                    row++;
+                }
+            }
+        }
+
+        int currentRow = rows[selectedIndex];
+        int currentCol = colsArr[selectedIndex];
+        int targetRow = currentRow + dy;
+        int targetCol = currentCol;
+
+        // Find exact column match on target row first
+        int exactIdx = -1;
+        for (int i = 0; i < count; i++) {
+            if (rows[i] == targetRow && colsArr[i] == targetCol) {
+                exactIdx = i;
+                break;
+            }
+        }
+
+        if (exactIdx >= 0) {
+            // Exact column match found on the next row
+            selectedIndex = exactIdx;
+        } else {
+            // No exact match (incomplete row). Skip to the next group's row
+            // that has the target column, searching further in the direction.
+            int searchRow = targetRow + dy;
+            int maxRow = rows[count - 1];
+            int minRow = rows[0];
+            int bestIdx = -1;
+
+            while (searchRow >= minRow && searchRow <= maxRow) {
+                for (int i = 0; i < count; i++) {
+                    if (rows[i] == searchRow && colsArr[i] == targetCol) {
+                        bestIdx = i;
+                        break;
+                    }
+                }
+                if (bestIdx != -1) break;
+                searchRow += dy;
+            }
+
+            if (bestIdx >= 0) {
+                selectedIndex = bestIdx;
+            } else {
+                // Absolute last resort: go to the last item on the incomplete row
+                // (only if nothing further exists in the target column)
+                int fallbackIdx = -1;
+                int fallbackRow = targetRow;
+                // Search from targetRow outward
+                while (fallbackRow >= minRow && fallbackRow <= maxRow) {
+                    int lastOnRow = -1;
+                    for (int i = 0; i < count; i++) {
+                        if (rows[i] == fallbackRow) {
+                            lastOnRow = i;
+                        }
+                    }
+                    if (lastOnRow >= 0) {
+                        fallbackIdx = lastOnRow;
+                        break;
+                    }
+                    fallbackRow += dy;
+                }
+                if (fallbackIdx >= 0) {
+                    selectedIndex = fallbackIdx;
+                }
+            }
         }
     }
 

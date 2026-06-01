@@ -43,9 +43,9 @@ public class ModConfig {
         Path path = Path.of(CONFIG_FILE);
         if (!Files.exists(path)) return;
 
-        try {
+        try (var reader = Files.newBufferedReader(path)) {
             Properties props = new Properties();
-            props.load(Files.newBufferedReader(path));
+            props.load(reader);
             apiKey = props.getProperty("api_key", "");
             serverUrl = props.getProperty("server_url", "https://schematicraft.com");
         } catch (IOException e) {

@@ -107,6 +107,9 @@ public class LibraryScreen extends Screen {
     // Preview expand overlay
     private boolean previewExpanded = false;
 
+    // Suppress the first charTyped after opening (keybind char leaks into search)
+    private boolean suppressNextChar = true;
+
     public LibraryScreen(@Nullable TargetDevice.OpenContext openContext) {
         super(Component.literal("Schematicraft Library"));
         this.targetDevice = TargetDevice.resolve(openContext);
@@ -352,10 +355,17 @@ public class LibraryScreen extends Screen {
                     tileSize - 2, tileThumbH - 2, tileSize - 2, tileThumbH - 2);
         } else {
             graphics.fill(x + 1, y + 1, x + tileSize - 1, y + tileThumbH - 1, 0xFF0A0A0A);
-            int dotCount = (int) ((System.currentTimeMillis() / 500) % 4);
-            String dots = ".".repeat(dotCount);
-            graphics.drawCenteredString(this.font, dots,
-                    x + tileSize / 2, y + tileThumbH / 2 - 4, GuiColors.TEXT_DIM);
+            if (schematic.thumbnailUrl() != null && !schematic.thumbnailUrl().isEmpty()) {
+                // Has a thumbnail URL but still loading
+                int dotCount = (int) ((System.currentTimeMillis() / 500) % 4);
+                String dots = ".".repeat(dotCount);
+                graphics.drawCenteredString(this.font, dots,
+                        x + tileSize / 2, y + tileThumbH / 2 - 4, GuiColors.TEXT_DIM);
+            } else {
+                // No thumbnail available
+                graphics.drawCenteredString(this.font, "No image",
+                        x + tileSize / 2, y + tileThumbH / 2 - 4, GuiColors.TEXT_DIM);
+            }
         }
 
         // Name below thumbnail
@@ -473,7 +483,7 @@ public class LibraryScreen extends Screen {
         int loadBg = loadEnabled ? GuiColors.BTN_PRIMARY_BG : GuiColors.BTN_BG;
         int loadBorder = loadEnabled ? GuiColors.BTN_PRIMARY_BORDER : GuiColors.BORDER_DARK;
         int loadTextColor = loadEnabled ? GuiColors.BTN_PRIMARY_TEXT : GuiColors.TEXT_DISABLED;
-        String loadLabel = targetDevice.getLoadButtonText() + " >";
+        String loadLabel = targetDevice.getLoadButtonText();
 
         graphics.fill(INFO_X, btnY, INFO_X + LOAD_BTN_W, btnY + ACTION_BTN_H, loadBg);
         drawBorder(graphics, INFO_X, btnY, LOAD_BTN_W, ACTION_BTN_H, loadBorder);
@@ -701,6 +711,12 @@ public class LibraryScreen extends Screen {
 
     @Override
     public boolean charTyped(char codePoint, int modifiers) {
+        // Suppress the keybind character that leaks through on the frame the screen opens
+        if (suppressNextChar) {
+            suppressNextChar = false;
+            return true;
+        }
+
         // If search field is not focused, redirect typing to it (AE2 pattern)
         if (searchField != null && !searchField.isFocused()) {
             // Don't redirect shortcut chars when search is empty
@@ -736,6 +752,10 @@ public class LibraryScreen extends Screen {
                 && mouseX < this.width - SCROLLBAR_W) {
             int tileIdx = getTileIndexAt(mouseX, mouseY);
             if (tileIdx >= 0 && button == 0) {
+                // Unfocus search so arrow keys and Enter work for grid navigation
+                if (searchField != null) {
+                    searchField.setFocused(false);
+                }
                 long now = System.currentTimeMillis();
                 if (tileIdx == lastClickIndex && now - lastClickTime < DOUBLE_CLICK_MS) {
                     gridState.setSelectedIndex(tileIdx);
@@ -837,11 +857,17 @@ public class LibraryScreen extends Screen {
                     String preview = new String(data, 0, Math.min(data.length, 500));
                     LOGGER.info("[DEBUG] Downloaded JSON preview: {}", preview);
 
-                    boolean success = dispatchLoad(data);
-                    if (success) {
+                    LoadResult loadResult = dispatchLoad(data);
+                    if (loadResult.success()) {
                         String title = selected.title() != null
                                 ? selected.title() : "schematic";
-                        setStatus("Loaded: " + title, GuiColors.SUCCESS, 3000);
+                        if (loadResult.hasDroppedBlocks()) {
+                            setStatus("Loaded: " + title + " (" + loadResult.droppedBlockTypes().size()
+                                    + " unknown block types dropped)", GuiColors.WARNING, 5000);
+                            LOGGER.warn("Dropped block types: {}", loadResult.droppedBlockTypes());
+                        } else {
+                            setStatus("Loaded: " + title, GuiColors.SUCCESS, 3000);
+                        }
                         SchematiCraftAPIWrapper.get()
                                 .submitSuccessFeedback(result.downloadId);
                         this.onClose();
@@ -872,18 +898,34 @@ public class LibraryScreen extends Screen {
      * Dispatch downloaded schematic data to the resolved target device.
      * Editor mods register their handler via setLoadHandler().
      */
-    private boolean dispatchLoad(byte[] data) {
+    private LoadResult dispatchLoad(byte[] data) {
         if (loadHandler != null) {
             return loadHandler.load(targetDevice, data);
         }
         LOGGER.warn("No load handler registered for LibraryScreen");
-        return false;
+        return LoadResult.failure();
+    }
+
+    /** Result from a load operation. */
+    public record LoadResult(boolean success, int blocksLoaded, List<String> droppedBlockTypes) {
+        public static LoadResult success(int blocksLoaded) {
+            return new LoadResult(true, blocksLoaded, List.of());
+        }
+        public static LoadResult partial(int blocksLoaded, List<String> droppedBlockTypes) {
+            return new LoadResult(true, blocksLoaded, droppedBlockTypes);
+        }
+        public static LoadResult failure() {
+            return new LoadResult(false, 0, List.of());
+        }
+        public boolean hasDroppedBlocks() {
+            return !droppedBlockTypes.isEmpty();
+        }
     }
 
     /** Functional interface for editor-specific load dispatch. */
     @FunctionalInterface
     public interface LoadHandler {
-        boolean load(TargetDevice target, byte[] schematicData);
+        LoadResult load(TargetDevice target, byte[] schematicData);
     }
 
     private static LoadHandler loadHandler = null;
@@ -1037,8 +1079,35 @@ public class LibraryScreen extends Screen {
         int idx = gridState.getSelectedIndex();
         if (idx < 0) return;
 
-        int row = idx / COLS;
-        int tileY = row * (tileTotalH + TILE_GAP);
+        // Walk the display list to find the actual Y position of the selected tile,
+        // accounting for bundle headers that add vertical space.
+        List<GridState.DisplayEntry> displayList = gridState.getDisplayList();
+        int y = 0;
+        int col = 0;
+        int schematicIdx = 0;
+        int tileY = 0;
+
+        for (GridState.DisplayEntry entry : displayList) {
+            if (entry instanceof GridState.BundleHeaderEntry) {
+                if (col > 0) {
+                    y += tileTotalH + TILE_GAP;
+                    col = 0;
+                }
+                y += BUNDLE_HEADER_H + TILE_GAP;
+            } else if (entry instanceof GridState.SchematicTileEntry) {
+                if (schematicIdx == idx) {
+                    tileY = y;
+                    break;
+                }
+                col++;
+                if (col >= COLS) {
+                    col = 0;
+                    y += tileTotalH + TILE_GAP;
+                }
+                schematicIdx++;
+            }
+        }
+
         int scrollOffset = gridState.getScrollOffset();
 
         if (tileY < scrollOffset) {

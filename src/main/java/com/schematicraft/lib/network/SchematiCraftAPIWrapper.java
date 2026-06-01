@@ -63,6 +63,16 @@ public class SchematiCraftAPIWrapper {
             LOGGER.info("[perf] library total: {}ms", System.currentTimeMillis() - start);
         }).exceptionally(ex -> {
             LOGGER.info("[perf] library FAILED after {}ms: {}", System.currentTimeMillis() - start, rootMessage(ex));
+
+            // If the key is rejected (401/403), clear it so the UI shows the setup state
+            Throwable cause = ex;
+            while (cause.getCause() != null) cause = cause.getCause();
+            if (cause instanceof SchematiCraftAPI.APIException apiEx
+                    && (apiEx.statusCode == 401 || apiEx.statusCode == 403)) {
+                LOGGER.warn("API key rejected (HTTP {}), clearing key", apiEx.statusCode);
+                ModConfig.setApiKey("");
+            }
+
             state.setLibraryError(rootMessage(ex));
             return null;
         });
