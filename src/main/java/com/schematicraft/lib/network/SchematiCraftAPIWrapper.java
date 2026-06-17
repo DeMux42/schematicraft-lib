@@ -164,8 +164,17 @@ public class SchematiCraftAPIWrapper {
         return runAsync(() -> {
             String url = ModConfig.getServerUrl() + "/api/ingame/v1/palettes"
                     + (schematicId != null ? "?schematicId=" + schematicId : "");
-            String json = httpGet(url);
-            return ApiJsonParser.parsePalettes(json);
+            LOGGER.info("[palette] GET {}", url);
+            try {
+                String json = httpGet(url);
+                LOGGER.info("[palette] response: {} chars", json.length());
+                var result = ApiJsonParser.parsePalettes(json);
+                LOGGER.info("[palette] parsed {} palettes", result.size());
+                return result;
+            } catch (Exception e) {
+                LOGGER.error("[palette] request failed: {}", e.getMessage(), e);
+                throw e;
+            }
         });
     }
 
@@ -216,7 +225,8 @@ public class SchematiCraftAPIWrapper {
                         .GET().build();
 
                 java.nio.file.Path tempFile = java.nio.file.Files.createTempFile("schematicraft_pal_", ".json");
-                java.net.http.HttpResponse<java.nio.file.Path> response = java.net.http.HttpClient.newHttpClient()
+                java.net.http.HttpResponse<java.nio.file.Path> response = java.net.http.HttpClient.newBuilder()
+                        .version(java.net.http.HttpClient.Version.HTTP_1_1).build()
                         .send(request, java.net.http.HttpResponse.BodyHandlers.ofFile(tempFile));
 
                 if (response.statusCode() >= 400) {
@@ -244,7 +254,8 @@ public class SchematiCraftAPIWrapper {
                 .header("Authorization", "Bearer " + ModConfig.getApiKey())
                 .header("X-Schematicraft-Client", clientIdentifier)
                 .GET().build();
-        var response = java.net.http.HttpClient.newHttpClient()
+        var response = java.net.http.HttpClient.newBuilder()
+                .version(java.net.http.HttpClient.Version.HTTP_1_1).build()
                 .send(request, java.net.http.HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() >= 400) {
             throw new RuntimeException("HTTP " + response.statusCode() + ": " + response.body());
@@ -259,7 +270,8 @@ public class SchematiCraftAPIWrapper {
                 .header("Content-Type", "application/json")
                 .header("X-Schematicraft-Client", clientIdentifier)
                 .POST(java.net.http.HttpRequest.BodyPublishers.ofString(jsonBody)).build();
-        var response = java.net.http.HttpClient.newHttpClient()
+        var response = java.net.http.HttpClient.newBuilder()
+                .version(java.net.http.HttpClient.Version.HTTP_1_1).build()
                 .send(request, java.net.http.HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() >= 400) {
             throw new RuntimeException("HTTP " + response.statusCode() + ": " + response.body());
@@ -273,7 +285,8 @@ public class SchematiCraftAPIWrapper {
                 .header("Authorization", "Bearer " + ModConfig.getApiKey())
                 .header("X-Schematicraft-Client", clientIdentifier)
                 .DELETE().build();
-        var response = java.net.http.HttpClient.newHttpClient()
+        var response = java.net.http.HttpClient.newBuilder()
+                .version(java.net.http.HttpClient.Version.HTTP_1_1).build()
                 .send(request, java.net.http.HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() >= 400 && response.statusCode() != 404) {
             throw new RuntimeException("HTTP " + response.statusCode() + ": " + response.body());

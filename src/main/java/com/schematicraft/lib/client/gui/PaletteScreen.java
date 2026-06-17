@@ -114,6 +114,11 @@ public class PaletteScreen extends Screen {
     }
 
     private void loadPalettes() {
+        if (!ModConfig.hasApiKey()) {
+            loading = false;
+            palettes = new ArrayList<>();
+            return;
+        }
         loading = true;
         errorMessage = null;
         SchematiCraftAPIWrapper.get().loadPalettes(schematic.id()).thenAccept(result -> {
@@ -127,10 +132,10 @@ public class PaletteScreen extends Screen {
             Minecraft.getInstance().execute(() -> {
                 loading = false;
                 String msg = SchematiCraftAPIWrapper.rootMessage(ex);
-                // Treat 404 as "no palettes" (endpoint may not be deployed yet)
-                if (msg.contains("404")) {
+                // Treat 404 or connection errors as "no palettes"
+                if (msg.contains("404") || msg.contains("EOF") || msg.contains("Connection")) {
                     palettes = new ArrayList<>();
-                    LOGGER.debug("Palette endpoint not available (404), showing empty list");
+                    LOGGER.debug("Palette load unavailable ({}), showing empty list", msg);
                 } else {
                     errorMessage = "Failed to load palettes: " + msg;
                     LOGGER.warn("Palette load failed: {}", errorMessage);
