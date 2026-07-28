@@ -11,7 +11,8 @@ import net.minecraft.network.chat.Component;
 
 import javax.annotation.Nullable;
 
-public class ApiKeyScreen extends Screen {
+public class ApiKeyScreen extends Screen
+        implements com.schematicraft.lib.client.gui.SchematicraftScreen {
     private static final org.slf4j.Logger LOGGER = com.mojang.logging.LogUtils.getLogger();
     @Nullable
     private final Screen parent;

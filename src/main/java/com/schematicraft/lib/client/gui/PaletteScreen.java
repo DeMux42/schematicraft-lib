@@ -9,31 +9,22 @@ import com.schematicraft.lib.network.SchematiCraftAPIWrapper;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
-import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
-import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.ResourceLocation;
-import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.Items;
-import net.minecraft.world.level.block.Block;
-import net.minecraft.world.level.block.Blocks;
 import org.lwjgl.glfw.GLFW;
 import org.slf4j.Logger;
 
-import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.Collectors;
 
 /**
- * Palette selection and preview screen.
- * Shows available palettes for a schematic in a 4-wide grid.
- * Each palette card shows name, mapping count, and a visual summary
- * of block replacements. User can select a palette and confirm to
- * download the schematic with that palette applied.
+ * Palette picker. Apply only.
+ *
+ * Shows the palettes the user already created on the website and applies the
+ * selected one to this schematic at download time. There is no palette
+ * authoring in game: palettes are created and edited on the website.
  */
-public class PaletteScreen extends Screen {
+public class PaletteScreen extends Screen implements SchematicraftScreen {
     private static final Logger LOGGER = LogUtils.getLogger();
 
     // Layout
@@ -52,6 +43,8 @@ public class PaletteScreen extends Screen {
     private int selectedIndex = -1;
     private boolean loading = true;
     private String errorMessage = null;
+    /** Transient message for a failed download or load. Keeps the grid visible. */
+    private String statusText = "";
     private int scrollOffset = 0;
     private int maxScroll = 0;
 
@@ -64,10 +57,9 @@ public class PaletteScreen extends Screen {
     // Buttons
     private Button applyButton;
     private Button backButton;
-    private Button newPaletteButton;
 
     public PaletteScreen(SchematicEntry schematic, TargetDevice targetDevice) {
-        super(Component.literal("Palette Manager"));
+        super(Component.literal("Palettes"));
         this.schematic = schematic;
         this.targetDevice = targetDevice;
     }
@@ -80,40 +72,33 @@ public class PaletteScreen extends Screen {
         gridBottom = this.height - FOOTER_H;
         int gridWidth = this.width - CARD_PADDING * 2;
         cardW = (gridWidth - CARD_GAP * (COLS - 1)) / COLS;
-        cardH = 120; // Fixed card height
+        cardH = 120;
 
-        // Footer buttons
         int btnY = this.height - FOOTER_H + 10;
         int centerX = this.width / 2;
 
         backButton = Button.builder(Component.literal("Back"),
                 b -> Minecraft.getInstance().setScreen(new LibraryScreen()))
-                .bounds(centerX - 150, btnY, 60, 20).build();
+                .bounds(centerX - 130, btnY, 60, 20).build();
         this.addRenderableWidget(backButton);
 
         applyButton = Button.builder(Component.literal("Download with Palette"),
                 b -> downloadWithPalette())
-                .bounds(centerX - 80, btnY, 130, 20).build();
+                .bounds(centerX - 60, btnY, 190, 20).build();
         applyButton.active = false;
         this.addRenderableWidget(applyButton);
 
-        newPaletteButton = Button.builder(Component.literal("+ New Palette"),
-                b -> openPaletteEditor())
-                .bounds(centerX + 60, btnY, 90, 20).build();
-        this.addRenderableWidget(newPaletteButton);
-
-        Button editButton = Button.builder(Component.literal("Edit Copy"),
-                b -> editSelectedPalette())
-                .bounds(centerX + 160, btnY, 70, 20).build();
-        this.addRenderableWidget(editButton);
-
-        // Load palettes from API
         if (loading) {
             loadPalettes();
         }
     }
 
     private void loadPalettes() {
+        if (!ModConfig.hasApiKey()) {
+            loading = false;
+            palettes = new ArrayList<>();
+            return;
+        }
         loading = true;
         errorMessage = null;
         SchematiCraftAPIWrapper.get().loadPalettes(schematic.id()).thenAccept(result -> {
@@ -127,10 +112,10 @@ public class PaletteScreen extends Screen {
             Minecraft.getInstance().execute(() -> {
                 loading = false;
                 String msg = SchematiCraftAPIWrapper.rootMessage(ex);
-                // Treat 404 as "no palettes" (endpoint may not be deployed yet)
-                if (msg.contains("404")) {
+                // Treat 404 or connection errors as "no palettes"
+                if (msg.contains("404") || msg.contains("EOF") || msg.contains("Connection")) {
                     palettes = new ArrayList<>();
-                    LOGGER.debug("Palette endpoint not available (404), showing empty list");
+                    LOGGER.debug("Palette load unavailable ({}), showing empty list", msg);
                 } else {
                     errorMessage = "Failed to load palettes: " + msg;
                     LOGGER.warn("Palette load failed: {}", errorMessage);
@@ -142,13 +127,10 @@ public class PaletteScreen extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        // Background
         graphics.fill(0, 0, this.width, this.height, GuiColors.SCREEN_BG);
 
-        // Header
         renderHeader(graphics);
 
-        // Palette grid
         if (loading) {
             graphics.drawCenteredString(this.font, "Loading palettes...",
                     this.width / 2, this.height / 2, GuiColors.TEXT_SECONDARY);
@@ -156,18 +138,31 @@ public class PaletteScreen extends Screen {
             graphics.drawCenteredString(this.font, errorMessage,
                     this.width / 2, this.height / 2, GuiColors.ERROR);
         } else if (palettes.isEmpty()) {
-            graphics.drawCenteredString(this.font, "No palettes available. Create one!",
-                    this.width / 2, this.height / 2, GuiColors.TEXT_SECONDARY);
+            graphics.drawCenteredString(this.font, "No palettes for this schematic",
+                    this.width / 2, this.height / 2 - 6, GuiColors.TEXT_SECONDARY);
+            graphics.drawCenteredString(this.font, "Create palettes on schematicraft.com",
+                    this.width / 2, this.height / 2 + 6, GuiColors.TEXT_DIM);
         } else {
             renderPaletteGrid(graphics, mouseX, mouseY);
         }
 
-        // Footer separator
         graphics.fill(0, this.height - FOOTER_H, this.width, this.height - FOOTER_H + 1,
                 GuiColors.BORDER_SEPARATOR);
 
-        // Widgets (buttons)
+        // Failure message sits above the footer so the palette grid stays visible.
+        if (!statusText.isEmpty()) {
+            graphics.drawCenteredString(this.font, statusText,
+                    this.width / 2, this.height - FOOTER_H - 12, GuiColors.ERROR);
+        }
+
         super.render(graphics, mouseX, mouseY, partialTick);
+    }
+
+    private void failLoad(String reason) {
+        statusText = reason;
+        LOGGER.warn("Palette load failed: {}", reason);
+        applyButton.setMessage(Component.literal("Download with Palette"));
+        applyButton.active = true;
     }
 
     @Override
@@ -181,14 +176,13 @@ public class PaletteScreen extends Screen {
 
         String title = "Palettes for: " + (schematic.title() != null ? schematic.title() : "Untitled");
         graphics.drawString(this.font, title, CARD_PADDING, 6, GuiColors.SELECTED, false);
-        graphics.drawString(this.font, palettes.size() + " palette" + (palettes.size() != 1 ? "s" : "") + " available",
-                CARD_PADDING, 18, GuiColors.TEXT_DIM, false);
+        graphics.drawString(this.font, "Select a palette, then download", CARD_PADDING, 18,
+                GuiColors.TEXT_DIM, false);
     }
 
     private void renderPaletteGrid(GuiGraphics graphics, int mouseX, int mouseY) {
         graphics.enableScissor(0, gridTop, this.width, gridBottom);
 
-        int x = CARD_PADDING;
         int y = gridTop + CARD_PADDING - scrollOffset;
 
         for (int i = 0; i < palettes.size(); i++) {
@@ -213,35 +207,28 @@ public class PaletteScreen extends Screen {
         boolean selected = index == selectedIndex;
         boolean hovered = mouseX >= x && mouseX < x + cardW && mouseY >= y && mouseY < y + cardH;
 
-        // Card background
         int bg = selected ? GuiColors.TILE_SELECTED_BG : (hovered ? GuiColors.TILE_HOVER_BG : GuiColors.TILE_BG);
         int border = selected ? GuiColors.TILE_SELECTED_BORDER : (hovered ? GuiColors.TILE_HOVER_BORDER : GuiColors.TILE_BORDER);
         graphics.fill(x, y, x + cardW, y + cardH, bg);
         drawBorder(graphics, x, y, cardW, cardH, border);
 
-        // Palette name
         String name = palette.name() != null ? palette.name() : "Unnamed";
         graphics.drawString(this.font, truncate(name, cardW - 8),
                 x + 4, y + 4, selected ? GuiColors.SELECTED : GuiColors.TEXT_PRIMARY, false);
 
-        // Mapping count
         graphics.drawString(this.font, palette.mappingCount() + " mappings",
                 x + 4, y + 16, GuiColors.TEXT_DIM, false);
 
-        // Visibility badge
         String vis = palette.visibility();
         int visColor = "public".equals(vis) ? GuiColors.SUCCESS : GuiColors.TEXT_DIM;
         graphics.drawString(this.font, vis, x + cardW - this.font.width(vis) - 4, y + 4, visColor, false);
 
-        // Block mapping preview (show first few mappings)
         int mappingY = y + 30;
         List<BlockMapping> mappings = palette.mappings();
         int shown = Math.min(mappings.size(), MAX_VISIBLE_MAPPINGS);
         for (int i = 0; i < shown; i++) {
             BlockMapping m = mappings.get(i);
-            String from = shortBlockName(m.original());
-            String to = shortBlockName(m.replacement());
-            String line = from + " to " + to;
+            String line = shortBlockName(m.original()) + " to " + shortBlockName(m.replacement());
             graphics.drawString(this.font, truncate(line, cardW - 8),
                     x + 4, mappingY + i * MAPPING_ROW_H, GuiColors.TEXT_SECONDARY, false);
         }
@@ -300,29 +287,35 @@ public class PaletteScreen extends Screen {
         PaletteEntry palette = palettes.get(selectedIndex);
         LOGGER.info("Downloading schematic {} with palette {}", schematic.id(), palette.id());
 
-        // Download with paletteId parameter (server applies the palette)
+        statusText = "";
         applyButton.active = false;
         applyButton.setMessage(Component.literal("Downloading..."));
 
-        SchematiCraftAPIWrapper.get().downloadSchematicWithPalette(schematic.id(), palette.id())
+        // Request the format and editor for the resolved target device so palette
+        // apply works for every editor, not just Building Gadgets.
+        SchematiCraftAPIWrapper.get().downloadSchematicWithPalette(
+                        schematic.id(), palette.id(),
+                        targetDevice.getDownloadFormat(), targetDevice.getDownloadEditor())
                 .thenAccept(result -> {
             Minecraft.getInstance().execute(() -> {
                 try {
                     byte[] data = java.nio.file.Files.readAllBytes(result.file);
                     java.nio.file.Files.deleteIfExists(result.file);
 
-                    if (LibraryScreen.getLoadHandler() != null) {
-                        var loadResult = LibraryScreen.getLoadHandler().load(targetDevice, data);
-                        if (loadResult.success()) {
-                            SchematiCraftAPIWrapper.get().submitSuccessFeedback(result.downloadId);
-                            Minecraft.getInstance().setScreen(null);
-                        } else {
-                            applyButton.setMessage(Component.literal("Load failed"));
-                            applyButton.active = true;
-                        }
+                    var handler = LibraryScreen.getLoadHandler(targetDevice);
+                    if (handler == null) {
+                        failLoad("Loading is not available for "
+                                + targetDevice.getDisplayName());
+                        return;
+                    }
+                    var loadResult = handler.load(targetDevice, data);
+                    if (loadResult.success()) {
+                        SchematiCraftAPIWrapper.get().submitSuccessFeedback(result.downloadId);
+                        Minecraft.getInstance().setScreen(null);
                     } else {
-                        applyButton.setMessage(Component.literal("Load failed"));
-                        applyButton.active = true;
+                        failLoad(loadResult.reason() != null
+                                ? loadResult.reason()
+                                : "Could not load into " + targetDevice.getDisplayName());
                     }
                 } catch (Exception e) {
                     LOGGER.error("Palette download load failed", e);
@@ -338,71 +331,6 @@ public class PaletteScreen extends Screen {
             });
             return null;
         });
-    }
-
-    private void openPaletteEditor() {
-        // Download schematic (or use cache) to extract block list, then open editor
-        openEditorWithBlocks(null);
-    }
-
-    private void editSelectedPalette() {
-        if (selectedIndex < 0 || selectedIndex >= palettes.size()) return;
-        openEditorWithBlocks(palettes.get(selectedIndex));
-    }
-
-    private void openEditorWithBlocks(@Nullable PaletteEntry base) {
-        var cache = com.schematicraft.lib.core.SchematicDataCache.get();
-
-        if (cache.has(schematic.id())) {
-            // Already cached, extract blocks and open immediately
-            List<String> blocks = cache.extractBlockList(schematic.id());
-            doOpenEditor(base, blocks);
-        } else {
-            // Need to download first
-            loading = true;
-            SchematiCraftAPIWrapper.get().downloadSchematic(schematic.id()).thenAccept(result -> {
-                Minecraft.getInstance().execute(() -> {
-                    try {
-                        byte[] data = java.nio.file.Files.readAllBytes(result.file);
-                        java.nio.file.Files.deleteIfExists(result.file);
-                        cache.put(schematic.id(), data);
-                        List<String> blocks = com.schematicraft.lib.core.SchematicDataCache
-                                .extractBlockListFromData(data);
-                        doOpenEditor(base, blocks);
-                    } catch (Exception e) {
-                        loading = false;
-                        errorMessage = "Failed to load schematic: " + e.getMessage();
-                    }
-                });
-            }).exceptionally(ex -> {
-                Minecraft.getInstance().execute(() -> {
-                    loading = false;
-                    errorMessage = "Download failed: " + SchematiCraftAPIWrapper.rootMessage(ex);
-                });
-                return null;
-            });
-        }
-    }
-
-    private void doOpenEditor(@Nullable PaletteEntry base, List<String> schematicBlocks) {
-        if (editorOpener != null) {
-            editorOpener.open(schematic, targetDevice, base, schematicBlocks);
-        } else {
-            LOGGER.warn("No palette editor opener registered");
-        }
-    }
-
-    /** Editor opener callback. Set by the editor mod at startup. */
-    private static PaletteEditorOpener editorOpener = null;
-
-    @FunctionalInterface
-    public interface PaletteEditorOpener {
-        void open(SchematicEntry schematic, TargetDevice target,
-                  @Nullable PaletteEntry base, @Nullable List<String> schematicBlocks);
-    }
-
-    public static void setEditorOpener(PaletteEditorOpener opener) {
-        editorOpener = opener;
     }
 
     // --- Helpers ---
@@ -429,7 +357,6 @@ public class PaletteScreen extends Screen {
 
     private String shortBlockName(String fullName) {
         if (fullName == null) return "?";
-        // Remove minecraft: prefix for display
         if (fullName.startsWith("minecraft:")) return fullName.substring(10);
         return fullName;
     }

@@ -18,15 +18,38 @@ import java.util.List;
  */
 public class GridState {
 
+    /**
+     * Which set of schematics the grid is showing.
+     *
+     * These behave differently on purpose. MY_LIBRARY is fully loaded, so the
+     * search box filters it locally and instantly. DISCOVER is a server query, so
+     * the search box submits instead of filtering, and results arrive by page.
+     */
+    public enum Scope { DISCOVER, MY_LIBRARY }
+
     /** An entry in the flat display list: either a bundle header or a schematic tile. */
     public sealed interface DisplayEntry permits BundleHeaderEntry, SchematicTileEntry {}
 
     public record BundleHeaderEntry(String bundleId, String name, int count, boolean pinned) implements DisplayEntry {}
     public record SchematicTileEntry(SchematicEntry schematic, String bundleId) implements DisplayEntry {}
 
-    // Bundle tab state
+    /**
+     * Last scope the user chose, remembered for the session.
+     *
+     * A new GridState is created every time the screen opens, including the
+     * returns after an upload or a bundle creation, so without this the view would
+     * snap back to Discover and lose the user's place. Defaults to DISCOVER so a
+     * first-time user with an empty library still sees downloadable content.
+     */
+    private static Scope lastScope = Scope.DISCOVER;
+
+    private Scope scope = lastScope;
+
+    // Bundle tab state. The active tab is remembered for the same reason as the
+    // scope: reopening after an upload should not silently jump back to "All".
+    private static int lastActiveBundleIndex = -1;
     private final List<BundleTabInfo> pinnedBundles = new ArrayList<>();
-    private int activeBundleIndex = -1; // -1 = "All"
+    private int activeBundleIndex = lastActiveBundleIndex; // -1 = "All"
 
     // Display list (flat, includes headers when on "All" tab)
     private List<DisplayEntry> displayList = Collections.emptyList();
@@ -41,12 +64,35 @@ public class GridState {
     private String searchText = "";
     private boolean searchActive = false;
 
-    // Status
+    // Status message shown in the status bar. Text, colour, and expiry live
+    // together so there is one owner of "what is the current status".
     private String statusText = "";
+    private int statusColor = GuiColors.SUCCESS;
     private long statusClearAt = 0;
 
     public GridState() {
         rebuildPinnedBundles();
+    }
+
+    // --- Scope ---
+
+    public Scope getScope() { return scope; }
+
+    public boolean isDiscover() { return scope == Scope.DISCOVER; }
+
+    /**
+     * Switches scope. Selection, scroll, and the search box are per-scope
+     * concepts, so they reset rather than carrying a library filter into a server
+     * query or vice versa.
+     */
+    public void setScope(Scope scope) {
+        if (this.scope == scope) return;
+        this.scope = scope;
+        lastScope = scope;
+        this.selectedIndex = -1;
+        this.scrollOffset = 0;
+        this.searchText = "";
+        rebuildDisplayList();
     }
 
     // --- Bundle Tabs ---
@@ -60,6 +106,7 @@ public class GridState {
     /** -1 = All, 0+ = pinned bundle index */
     public void setActiveBundleIndex(int index) {
         this.activeBundleIndex = index;
+        lastActiveBundleIndex = index;
         this.scrollOffset = 0;
         this.selectedIndex = -1;
         rebuildDisplayList();
@@ -99,6 +146,13 @@ public class GridState {
             BundleEntry b = bundles.get(i);
             pinnedBundles.add(new BundleTabInfo(b.id(), b.name()));
         }
+
+        // The remembered tab can point past the end if bundles were removed, or if
+        // it was restored before the library finished loading.
+        if (activeBundleIndex >= pinnedBundles.size()) {
+            activeBundleIndex = -1;
+            lastActiveBundleIndex = -1;
+        }
     }
 
     // --- Display List ---
@@ -109,6 +163,19 @@ public class GridState {
         List<DisplayEntry> result = new ArrayList<>();
         LibraryState state = LibraryState.get();
         String filter = searchText.toLowerCase().trim();
+
+        if (scope == Scope.DISCOVER) {
+            // Flat list, no headers and no local filtering: the server already
+            // decided what matches and in what order.
+            for (SchematicEntry s : com.schematicraft.lib.core.DiscoverState.get().getResults()) {
+                result.add(new SchematicTileEntry(s, null));
+            }
+            this.displayList = result;
+            if (selectedIndex >= getSchematicCount()) {
+                selectedIndex = getSchematicCount() - 1;
+            }
+            return;
+        }
 
         if (activeBundleIndex == -1) {
             // "All" tab: show all bundles with headers
@@ -353,8 +420,12 @@ public class GridState {
 
     public String getStatusText() { return statusText; }
 
-    public void setStatus(String text, int durationMs) {
+    public int getStatusColor() { return statusColor; }
+
+    /** Shows a status message. A duration of 0 means it stays until replaced. */
+    public void setStatus(String text, int color, int durationMs) {
         this.statusText = text;
+        this.statusColor = color;
         this.statusClearAt = durationMs > 0 ? System.currentTimeMillis() + durationMs : 0;
     }
 

@@ -83,8 +83,41 @@ public class SchematiCraftAPIWrapper {
         return loadLibrary();
     }
 
-    public CompletableFuture<String> search(String query) {
-        return runAsync(() -> createClient().search(query, 1, 20));
+    /** Page size for the discover feed. The server caps limit at 50. */
+    public static final int DISCOVER_PAGE_SIZE = 24;
+
+    /**
+     * Search public schematics, paged and sorted.
+     *
+     * Used for the discover feed, where an empty query means "browse" and the
+     * sort decides what a first-time user sees. Hand-rolled rather than routed
+     * through the API client because the client does not expose sort.
+     */
+    public CompletableFuture<ApiJsonParser.SearchPage> searchPublic(
+            String query, int page, String sort) {
+        return runAsync(() -> {
+            StringBuilder url = new StringBuilder(ModConfig.getServerUrl())
+                    .append("/api/ingame/v1/search?page=").append(Math.max(1, page))
+                    .append("&limit=").append(DISCOVER_PAGE_SIZE);
+            if (query != null && !query.isBlank()) {
+                url.append("&query=").append(urlEncode(query));
+            }
+            if (sort != null && !sort.isBlank()) {
+                url.append("&sort=").append(urlEncode(sort));
+            }
+
+            long t0 = System.currentTimeMillis();
+            String json = httpGet(url.toString());
+            var parsed = ApiJsonParser.parseSearchPage(json);
+            LOGGER.info("[discover] page {} sort {} query '{}': {} results, hasMore {}, {}ms",
+                    page, sort, query, parsed.results().size(), parsed.hasMore(),
+                    System.currentTimeMillis() - t0);
+            return parsed;
+        });
+    }
+
+    private static String urlEncode(String value) {
+        return java.net.URLEncoder.encode(value, java.nio.charset.StandardCharsets.UTF_8);
     }
 
     public CompletableFuture<SchematiCraftAPI.DownloadResult> downloadSchematic(String schematicId) {
@@ -164,50 +197,38 @@ public class SchematiCraftAPIWrapper {
         return runAsync(() -> {
             String url = ModConfig.getServerUrl() + "/api/ingame/v1/palettes"
                     + (schematicId != null ? "?schematicId=" + schematicId : "");
-            String json = httpGet(url);
-            return ApiJsonParser.parsePalettes(json);
-        });
-    }
-
-    public CompletableFuture<com.schematicraft.lib.core.PaletteEntry> createPalette(
-            String name, java.util.List<com.schematicraft.lib.core.BlockMapping> mappings,
-            String schematicId) {
-        return runAsync(() -> {
-            String url = ModConfig.getServerUrl() + "/api/ingame/v1/palettes";
-            StringBuilder body = new StringBuilder();
-            body.append("{\"name\":\"").append(escapeJson(name)).append("\",");
-            body.append("\"visibility\":\"private\",");
-            if (schematicId != null) {
-                body.append("\"schematicId\":\"").append(schematicId).append("\",");
+            LOGGER.info("[palette] GET {}", url);
+            try {
+                String json = httpGet(url);
+                LOGGER.info("[palette] response: {} chars", json.length());
+                var result = ApiJsonParser.parsePalettes(json);
+                LOGGER.info("[palette] parsed {} palettes", result.size());
+                return result;
+            } catch (Exception e) {
+                LOGGER.error("[palette] request failed: {}", e.getMessage(), e);
+                throw e;
             }
-            body.append("\"mappings\":[");
-            for (int i = 0; i < mappings.size(); i++) {
-                var m = mappings.get(i);
-                if (i > 0) body.append(",");
-                body.append("{\"original\":\"").append(escapeJson(m.original()))
-                        .append("\",\"replacement\":\"").append(escapeJson(m.replacement())).append("\"}");
-            }
-            body.append("]}");
-            String json = httpPost(url, body.toString());
-            return ApiJsonParser.parseSinglePalette(json);
         });
     }
 
-    public CompletableFuture<Void> deletePalette(String paletteId) {
-        return runAsync(() -> {
-            String url = ModConfig.getServerUrl() + "/api/ingame/v1/palettes/" + paletteId;
-            httpDelete(url);
-            return null;
-        });
-    }
+    // Palette creation, update, and delete are website concerns and are
+    // intentionally not exposed here. The mod only lists and applies palettes.
 
+    /**
+     * Download a schematic with a palette applied by the cloud.
+     * Format and target editor come from the resolved target device so palette
+     * apply works for every editor, not just Building Gadgets.
+     */
     public CompletableFuture<SchematiCraftAPI.DownloadResult> downloadSchematicWithPalette(
-            String schematicId, String paletteId) {
+            String schematicId, String paletteId, String format, String targetEditor) {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 long t0 = System.currentTimeMillis();
+                String ext = format != null ? format : "json";
+                String editor = targetEditor != null ? targetEditor : "BuildingGadgets";
                 String url = ModConfig.getServerUrl() + "/api/ingame/v1/schematics/" + schematicId
-                        + "/download?format=json&targetEditor=BuildingGadgets&paletteId=" + paletteId + "&force=true";
+                        + "/download?format=" + ext + "&targetEditor=" + editor
+                        + "&paletteId=" + paletteId + "&force=true";
 
                 java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder()
                         .uri(java.net.URI.create(url))
@@ -215,8 +236,9 @@ public class SchematiCraftAPIWrapper {
                         .header("X-Schematicraft-Client", clientIdentifier)
                         .GET().build();
 
-                java.nio.file.Path tempFile = java.nio.file.Files.createTempFile("schematicraft_pal_", ".json");
-                java.net.http.HttpResponse<java.nio.file.Path> response = java.net.http.HttpClient.newHttpClient()
+                java.nio.file.Path tempFile = java.nio.file.Files.createTempFile("schematicraft_pal_", "." + ext);
+                java.net.http.HttpResponse<java.nio.file.Path> response = java.net.http.HttpClient.newBuilder()
+                        .version(java.net.http.HttpClient.Version.HTTP_1_1).build()
                         .send(request, java.net.http.HttpResponse.BodyHandlers.ofFile(tempFile));
 
                 if (response.statusCode() >= 400) {
@@ -244,7 +266,8 @@ public class SchematiCraftAPIWrapper {
                 .header("Authorization", "Bearer " + ModConfig.getApiKey())
                 .header("X-Schematicraft-Client", clientIdentifier)
                 .GET().build();
-        var response = java.net.http.HttpClient.newHttpClient()
+        var response = java.net.http.HttpClient.newBuilder()
+                .version(java.net.http.HttpClient.Version.HTTP_1_1).build()
                 .send(request, java.net.http.HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() >= 400) {
             throw new RuntimeException("HTTP " + response.statusCode() + ": " + response.body());
@@ -259,25 +282,13 @@ public class SchematiCraftAPIWrapper {
                 .header("Content-Type", "application/json")
                 .header("X-Schematicraft-Client", clientIdentifier)
                 .POST(java.net.http.HttpRequest.BodyPublishers.ofString(jsonBody)).build();
-        var response = java.net.http.HttpClient.newHttpClient()
+        var response = java.net.http.HttpClient.newBuilder()
+                .version(java.net.http.HttpClient.Version.HTTP_1_1).build()
                 .send(request, java.net.http.HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() >= 400) {
             throw new RuntimeException("HTTP " + response.statusCode() + ": " + response.body());
         }
         return response.body();
-    }
-
-    private void httpDelete(String url) throws Exception {
-        var request = java.net.http.HttpRequest.newBuilder()
-                .uri(java.net.URI.create(url))
-                .header("Authorization", "Bearer " + ModConfig.getApiKey())
-                .header("X-Schematicraft-Client", clientIdentifier)
-                .DELETE().build();
-        var response = java.net.http.HttpClient.newHttpClient()
-                .send(request, java.net.http.HttpResponse.BodyHandlers.ofString());
-        if (response.statusCode() >= 400 && response.statusCode() != 404) {
-            throw new RuntimeException("HTTP " + response.statusCode() + ": " + response.body());
-        }
     }
 
     private static String escapeJson(String s) {

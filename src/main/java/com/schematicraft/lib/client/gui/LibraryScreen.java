@@ -5,6 +5,7 @@ import com.schematicraft.lib.client.CameraMode;
 import com.schematicraft.lib.client.ThumbnailCache;
 import com.schematicraft.lib.config.ModConfig;
 import com.schematicraft.lib.core.BundleEntry;
+import com.schematicraft.lib.core.DiscoverState;
 import com.schematicraft.lib.core.LibraryState;
 import com.schematicraft.lib.core.SchematicEntry;
 import com.schematicraft.lib.network.SchematiCraftAPIWrapper;
@@ -14,6 +15,7 @@ import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.item.ItemStack;
 import org.lwjgl.glfw.GLFW;
 import org.slf4j.Logger;
 
@@ -30,7 +32,7 @@ import java.util.List;
  *
  * Accepts a nullable TargetDevice.OpenContext so it can be opened from tables or keybind.
  */
-public class LibraryScreen extends Screen {
+public class LibraryScreen extends Screen implements SchematicraftScreen {
     private static final Logger LOGGER = LogUtils.getLogger();
 
     // --- Layout constants ---
@@ -60,7 +62,9 @@ public class LibraryScreen extends Screen {
     private static final int ACTION_BTN_H = 16;
     private static final int BTN_GAP = 4;
     private static final int BTN_Y_OFFSET = 40;
-    private static final int TARGET_INFO_MARGIN = 120;
+    private static final int TARGET_INFO_MARGIN = 140;
+    private static final int TARGET_ICON_SIZE = 16;
+    private static final String PLUS_LABEL = "+";
     private static final int SEARCH_DEBOUNCE_MS = 150;
     private static final int DOUBLE_CLICK_MS = 400;
 
@@ -86,10 +90,6 @@ public class LibraryScreen extends Screen {
     private long lastSearchKeystroke = 0;
     private String pendingSearchText = null;
 
-    // Status display
-    private int statusColor = GuiColors.SUCCESS;
-    private long statusClearAt = 0;
-
     // Double-click detection
     private long lastClickTime = 0;
     private int lastClickIndex = -1;
@@ -104,8 +104,51 @@ public class LibraryScreen extends Screen {
     private List<Component> pendingTooltip = null;
     private int tooltipX, tooltipY;
 
+    // Bounds of the "+" tab, computed during render so clicks match what is drawn.
+    private int plusTabX = -1;
+    private int plusTabW = 0;
+
+    /**
+     * Bundle tab bounds, recorded during render.
+     *
+     * The bundle tabs start after the scope tabs and a divider, and their widths
+     * depend on bundle names, so recomputing the layout in the click handler drifts
+     * from what is on screen. Index 0 is the "All" tab, index n+1 is pinned tab n.
+     */
+    private final List<int[]> bundleTabBounds = new ArrayList<>();
+
+    /** True once the grid has been populated from the current loaded library. */
+    private boolean gridSynced = false;
+
+    // Scope tab bounds, recorded during render so clicks match what is drawn.
+    private int discoverTabX = -1, discoverTabW = 0;
+    private int libraryTabX = -1, libraryTabW = 0;
+
+    // Discover search executor state.
+    /** Idle time before an unsubmitted query fires, long enough not to spam. */
+    private static final int DISCOVER_DEBOUNCE_MS = 650;
+    private static final int DISCOVER_MIN_QUERY = 2;
+    private String discoverPendingQuery = null;
+    private long discoverLastKeystroke = 0;
+    /** Query currently in flight, used to coalesce rather than queue requests. */
+    private String discoverInFlight = null;
+    /** Newest query typed while a request was in flight. */
+    private String discoverQueued = null;
+    /** True once the grid has been populated from the current discover results. */
+    private boolean discoverSynced = false;
+
     // Preview expand overlay
     private boolean previewExpanded = false;
+
+    // Tab-cycled focus on the bottom action buttons, for keyboard-only access.
+    // Unlike the old search focus, this state is always drawn as a focus ring,
+    // so it is never invisible to the user.
+    private static final int ACTION_NONE = -1;
+    private static final int ACTION_LOAD = 0;
+    private static final int ACTION_UPLOAD = 1;
+    private static final int ACTION_CAMERA = 2;
+    private static final int ACTION_PALETTE = 3;
+    private int actionFocus = ACTION_NONE;
 
     // Suppress the first charTyped after opening (keybind char leaks into search)
     private boolean suppressNextChar = true;
@@ -138,16 +181,30 @@ public class LibraryScreen extends Screen {
         tileTotalH = tileThumbH + TILE_NAME_H;
         btnY = gridBottom + BTN_Y_OFFSET;
 
-        // Search field (always visible)
+        // Search field. Permanently focused and cannot lose focus: typing always
+        // filters, and arrows/Enter always drive the grid. There is deliberately
+        // no focus mode to switch, so no keystroke ever changes meaning.
         searchField = new EditBox(this.font, GRID_PADDING, TAB_BAR_H + 2,
                 this.width - GRID_PADDING * 2, SEARCH_FIELD_H, Component.literal(""));
         searchField.setMaxLength(100);
         searchField.setHint(Component.literal("Type to filter..."));
         searchField.setValue(gridState.getSearchText());
         searchField.setResponder(text -> {
-            pendingSearchText = text;
-            lastSearchKeystroke = System.currentTimeMillis();
+            if (gridState.isDiscover()) {
+                // Server query, so only note the keystroke; tickDiscover decides
+                // when to actually send it.
+                discoverPendingQuery = text;
+                discoverLastKeystroke = System.currentTimeMillis();
+            } else {
+                pendingSearchText = text;
+                lastSearchKeystroke = System.currentTimeMillis();
+            }
         });
+        searchField.setHint(Component.literal(gridState.isDiscover()
+                ? "Search public schematics, Enter to search"
+                : "Type to filter..."));
+        searchField.setCanLoseFocus(false);
+        searchField.setFocused(true);
         this.addRenderableWidget(searchField);
         this.setInitialFocus(searchField);
 
@@ -158,6 +215,7 @@ public class LibraryScreen extends Screen {
             loadLibrary();
         } else if (LibraryState.get().isLibraryLoaded()) {
             gridState.onLibraryUpdated();
+            gridSynced = true;
         }
 
         recomputeMaxScroll();
@@ -167,27 +225,216 @@ public class LibraryScreen extends Screen {
             pendingCameraReopen = false;
             setStatus("Screenshots captured", GuiColors.SUCCESS, 3000);
         }
+
+        // A message handed over by another screen, e.g. a finished upload.
+        if (handoffStatus != null) {
+            setStatus(handoffStatus, handoffStatusColor, handoffStatusDurationMs);
+            handoffStatus = null;
+        }
+    }
+
+    // Status handed to this screen by another screen that is closing itself.
+    private static String handoffStatus = null;
+    private static int handoffStatusColor = GuiColors.SUCCESS;
+    private static int handoffStatusDurationMs = 4000;
+
+    /**
+     * Queue a status message to show the next time the library screen opens.
+     *
+     * Lets a screen report its outcome and then close, instead of leaving the user
+     * on a finished form to dismiss it themselves.
+     */
+    public static void queueStatus(String text, int color, int durationMs) {
+        handoffStatus = text;
+        handoffStatusColor = color;
+        handoffStatusDurationMs = durationMs;
     }
 
     @Override
     public void tick() {
         super.tick();
 
-        // Search debounce
-        if (pendingSearchText != null
-                && System.currentTimeMillis() - lastSearchKeystroke > SEARCH_DEBOUNCE_MS) {
-            gridState.setSearchText(pendingSearchText);
-            pendingSearchText = null;
-            recomputeMaxScroll();
-        }
+        // The library is kept in step in both scopes: the bundle tabs and their
+        // hotkeys are visible from Discover, so they must not be empty there.
+        syncWithLibraryState();
 
-        // Status auto-clear
-        if (statusClearAt > 0 && System.currentTimeMillis() >= statusClearAt) {
-            gridState.clearStatus();
-            statusClearAt = 0;
+        if (gridState.isDiscover()) {
+            tickDiscover();
+        } else {
+            // Search debounce. Local filtering only, so this can be aggressive.
+            if (pendingSearchText != null
+                    && System.currentTimeMillis() - lastSearchKeystroke > SEARCH_DEBOUNCE_MS) {
+                gridState.setSearchText(pendingSearchText);
+                pendingSearchText = null;
+                recomputeMaxScroll();
+
+                // Auto-select the first result so Enter loads immediately after
+                // typing, with no arrow press needed.
+                if (gridState.getSchematicCount() > 0) {
+                    gridState.setSelectedIndex(0);
+                    gridState.setScrollOffset(0);
+                    ensureSelectedVisible();
+                }
+                actionFocus = ACTION_NONE;
+            }
         }
 
         gridState.tickStatus();
+    }
+
+    /**
+     * Keeps the grid in step with the shared library state.
+     *
+     * The grid used to be populated only in {@link #init()}, which broke whenever
+     * this screen opened while a load was already in flight: the load had been
+     * started elsewhere, so init saw "not loaded, already loading", did nothing,
+     * and no one told the grid when the data arrived. Opening the library right
+     * after an upload refresh landed in exactly that gap and showed an empty grid.
+     *
+     * Polling here means the grid recovers no matter who started the load or when
+     * it finishes, and it also picks up a stale library by kicking a fresh load.
+     */
+    private void syncWithLibraryState() {
+        LibraryState state = LibraryState.get();
+
+        if (state.isLibraryLoaded()) {
+            if (!gridSynced) {
+                gridSynced = true;
+                gridState.onLibraryUpdated();
+                recomputeMaxScroll();
+            }
+            return;
+        }
+
+        // Not loaded: make sure something is actually fetching it.
+        gridSynced = false;
+        if (!state.isLibraryLoading() && ModConfig.hasApiKey()) {
+            loadLibrary();
+        }
+    }
+
+    /**
+     * Drives the discover feed: first load, debounced querying, and syncing
+     * results into the grid.
+     *
+     * Typing stays instant in the text box; only the request is throttled. A query
+     * fires on Enter, or once typing has been idle for a moment. While a request
+     * is in flight, newer queries replace each other instead of queueing, so a
+     * burst of typing costs one extra request rather than one per keystroke.
+     */
+    private void tickDiscover() {
+        DiscoverState discover = DiscoverState.get();
+
+        // First open: fill the feed with popular public schematics.
+        if (!discover.isLoaded() && !discover.isLoading()
+                && discover.getError() == null && ModConfig.hasApiKey()) {
+            fetchDiscover("", 1);
+            return;
+        }
+
+        // Debounced query submission.
+        if (discoverPendingQuery != null
+                && System.currentTimeMillis() - discoverLastKeystroke > DISCOVER_DEBOUNCE_MS) {
+            String q = discoverPendingQuery.trim();
+            discoverPendingQuery = null;
+            // Treat a too-short query as a request to browse again, so clearing
+            // the box returns to the feed instead of stranding the user.
+            if (q.length() >= DISCOVER_MIN_QUERY || q.isEmpty()) {
+                submitDiscoverQuery(q);
+            }
+        }
+
+        // Sync results into the grid when a fetch lands.
+        if (!discover.isLoading()) {
+            if (!discoverSynced) {
+                discoverSynced = true;
+                gridState.rebuildDisplayList();
+                recomputeMaxScroll();
+                if (gridState.getSchematicCount() > 0 && gridState.getSelectedIndex() < 0) {
+                    gridState.setSelectedIndex(0);
+                }
+            }
+            // A query typed while the last request was running.
+            if (discoverQueued != null) {
+                String q = discoverQueued;
+                discoverQueued = null;
+                submitDiscoverQuery(q);
+            }
+        }
+    }
+
+    /** Runs a query now, or defers it if a request is already in flight. */
+    private void submitDiscoverQuery(String query) {
+        if (query.equals(DiscoverState.get().getQuery())
+                && DiscoverState.get().isLoaded()
+                && DiscoverState.get().getError() == null) {
+            return; // Already showing these results.
+        }
+        if (discoverInFlight != null) {
+            discoverQueued = query;
+            return;
+        }
+        gridState.setSelectedIndex(-1);
+        gridState.setScrollOffset(0);
+        fetchDiscover(query, 1);
+    }
+
+    /** Fetches one page of public schematics. */
+    private void fetchDiscover(String query, int page) {
+        if (!ModConfig.hasApiKey()) return;
+
+        DiscoverState discover = DiscoverState.get();
+        discover.beginFetch(query, page);
+        discoverInFlight = query;
+        discoverSynced = false;
+        if (page <= 1) {
+            setStatus(query.isEmpty() ? "Loading popular schematics..." : "Searching...",
+                    GuiColors.INFO, 0);
+        }
+
+        // Empty query browses by popularity, which is what makes the first open
+        // useful. A real query is ordered by relevance instead.
+        String sort = query.isEmpty() ? "popular" : null;
+
+        SchematiCraftAPIWrapper.get().searchPublic(query, page, sort)
+                .thenAccept(result -> Minecraft.getInstance().execute(() -> {
+                    discoverInFlight = null;
+                    discover.addPage(result.results(), result.page(),
+                            result.hasMore(), result.total());
+                    discoverSynced = false;
+                    if (page <= 1) {
+                        setStatus(result.total() + " public schematics",
+                                GuiColors.SUCCESS, 2500);
+                    } else {
+                        gridState.clearStatus();
+                    }
+                }))
+                .exceptionally(ex -> {
+                    Minecraft.getInstance().execute(() -> {
+                        discoverInFlight = null;
+                        String msg = SchematiCraftAPIWrapper.rootMessage(ex);
+                        // Rate limiting is expected if someone hammers search.
+                        if (msg.contains("429")) {
+                            msg = "Too many searches, wait a moment";
+                        }
+                        discover.setError(msg);
+                        discoverSynced = false;
+                        setStatus(msg, GuiColors.ERROR, 5000);
+                    });
+                    return null;
+                });
+    }
+
+    /** Loads the next page when the user scrolls to the end of the feed. */
+    private void maybeLoadMoreDiscover() {
+        DiscoverState discover = DiscoverState.get();
+        if (!gridState.isDiscover() || discover.isLoading() || !discover.hasMore()) return;
+        if (discoverInFlight != null) return;
+
+        // Within one row of the bottom.
+        if (gridState.getScrollOffset() >= maxScroll - tileTotalH) {
+            fetchDiscover(discover.getQuery(), discover.getPage() + 1);
+        }
     }
 
     @Override
@@ -241,8 +488,24 @@ public class LibraryScreen extends Screen {
 
         int x = GRID_PADDING;
 
+        // Scope tabs first. These are the primary split: other people's
+        // schematics versus your own, never mixed in one list.
+        x = renderScopeTab(graphics, x, GridState.Scope.DISCOVER, "Discover", mouseX, mouseY);
+        x = renderScopeTab(graphics, x, GridState.Scope.MY_LIBRARY, "My Library", mouseX, mouseY);
+
+        // Divider between scope tabs and the library's bundle tabs.
+        graphics.fill(x, TAB_Y_OFFSET + 2, x + 1, TAB_Y_OFFSET + TAB_H - 2,
+                GuiColors.BORDER_SEPARATOR);
+        x += TAB_PAD_X + 1;
+
+        // Bundle tabs stay visible in both scopes so Ctrl+1-7 always means the same
+        // thing. In Discover they read as inactive, and using one switches back to
+        // the library rather than doing nothing.
+        boolean inLibrary = !gridState.isDiscover();
+        bundleTabBounds.clear();
+
         // "All" tab
-        boolean allActive = gridState.getActiveBundleIndex() == -1;
+        boolean allActive = inLibrary && gridState.getActiveBundleIndex() == -1;
         int allText = allActive ? GuiColors.BUNDLE_TAB_ACTIVE : GuiColors.TEXT_SECONDARY;
         String allLabel = "All";
         int allW = this.font.width(allLabel) + TAB_PAD_INNER;
@@ -254,13 +517,14 @@ public class LibraryScreen extends Screen {
                     Component.literal("\u00a78Ctrl+Tab / Ctrl+Shift+Tab to cycle")
             ), mouseX, mouseY);
         }
+        bundleTabBounds.add(new int[] { x, allW });
         x += allW + TAB_PAD_X;
 
         // Pinned bundle tabs
         List<GridState.BundleTabInfo> pinned = gridState.getPinnedBundles();
         for (int i = 0; i < pinned.size(); i++) {
             GridState.BundleTabInfo tab = pinned.get(i);
-            boolean active = gridState.getActiveBundleIndex() == i;
+            boolean active = inLibrary && gridState.getActiveBundleIndex() == i;
             int textColor = active ? GuiColors.BUNDLE_TAB_ACTIVE : GuiColors.TEXT_SECONDARY;
 
             String label = "[" + (i + 1) + "] " + truncate(tab.name(), TAB_NAME_MAX_LEN);
@@ -278,8 +542,71 @@ public class LibraryScreen extends Screen {
                 ), mouseX, mouseY);
             }
 
+            bundleTabBounds.add(new int[] { x, tabW });
             x += tabW + TAB_PAD_X;
         }
+
+        // "+" tab, always last, for creating a bundle.
+        int plusW = this.font.width(PLUS_LABEL) + TAB_PAD_INNER;
+        if (x + plusW <= this.width - GRID_PADDING) {
+            boolean plusHover = isOver(mouseX, mouseY, x, TAB_Y_OFFSET, plusW, TAB_H);
+            if (plusHover) {
+                graphics.fill(x, TAB_Y_OFFSET, x + plusW, TAB_Y_OFFSET + TAB_H,
+                        GuiColors.TILE_HOVER_BG);
+                scheduleTooltip(List.of(Component.literal("New bundle")), mouseX, mouseY);
+            }
+            graphics.drawString(this.font, PLUS_LABEL, x + TAB_PAD_X, TAB_Y_OFFSET + 3,
+                    plusHover ? GuiColors.SELECTED : GuiColors.TEXT_SECONDARY, false);
+        }
+        plusTabX = x;
+        plusTabW = plusW;
+    }
+
+    /** Switches scope and resets the per-scope input state. */
+    private void switchScope(GridState.Scope scope) {
+        if (gridState.getScope() == scope) return;
+
+        gridState.setScope(scope);
+        actionFocus = ACTION_NONE;
+        pendingSearchText = null;
+        discoverPendingQuery = null;
+        discoverQueued = null;
+        discoverSynced = false;
+        gridState.clearStatus();
+
+        if (searchField != null) {
+            searchField.setValue("");
+            searchField.setHint(Component.literal(scope == GridState.Scope.DISCOVER
+                    ? "Search public schematics, Enter to search"
+                    : "Type to filter..."));
+        }
+        recomputeMaxScroll();
+    }
+
+    /** Draws one scope tab and records its bounds for hit-testing. */
+    private int renderScopeTab(GuiGraphics graphics, int x, GridState.Scope scope,
+                               String label, int mouseX, int mouseY) {
+        boolean active = gridState.getScope() == scope;
+        int w = this.font.width(label) + TAB_PAD_INNER;
+
+        if (active) {
+            graphics.fill(x, TAB_Y_OFFSET, x + w, TAB_Y_OFFSET + TAB_H,
+                    GuiColors.BUNDLE_TAB_ACTIVE_BG);
+        } else if (isOver(mouseX, mouseY, x, TAB_Y_OFFSET, w, TAB_H)) {
+            graphics.fill(x, TAB_Y_OFFSET, x + w, TAB_Y_OFFSET + TAB_H,
+                    GuiColors.TILE_HOVER_BG);
+        }
+        graphics.drawString(this.font, label, x + TAB_PAD_X, TAB_Y_OFFSET + 3,
+                active ? GuiColors.BUNDLE_TAB_ACTIVE : GuiColors.TEXT_SECONDARY, false);
+
+        if (scope == GridState.Scope.DISCOVER) {
+            discoverTabX = x;
+            discoverTabW = w;
+        } else {
+            libraryTabX = x;
+            libraryTabW = w;
+        }
+        return x + w + TAB_PAD_X;
     }
 
     private void renderGrid(GuiGraphics graphics, int mouseX, int mouseY) {
@@ -328,9 +655,66 @@ public class LibraryScreen extends Screen {
         maxScroll = Math.max(0, contentHeight - gridHeight);
         gridState.clampScroll(maxScroll);
 
+        // Empty and loading states, so the grid never sits blank without saying why.
+        if (displayList.isEmpty()) {
+            renderGridPlaceholder(graphics);
+        } else if (gridState.isDiscover() && DiscoverState.get().isLoading()) {
+            graphics.drawCenteredString(this.font, "Loading more...",
+                    this.width / 2, gridBottom - 14, GuiColors.TEXT_DIM);
+        }
+
         graphics.disableScissor();
 
         renderScrollbar(graphics, mouseX, mouseY);
+    }
+
+    /** Explains an empty grid, which differs by scope and cause. */
+    private void renderGridPlaceholder(GuiGraphics graphics) {
+        int cx = this.width / 2;
+        int cy = gridTop + (gridBottom - gridTop) / 2;
+
+        if (!ModConfig.hasApiKey()) {
+            graphics.drawCenteredString(this.font, "Set your API key to get started",
+                    cx, cy, GuiColors.TEXT_SECONDARY);
+            return;
+        }
+
+        if (gridState.isDiscover()) {
+            DiscoverState d = DiscoverState.get();
+            if (d.isLoading()) {
+                graphics.drawCenteredString(this.font, "Loading public schematics...",
+                        cx, cy, GuiColors.TEXT_SECONDARY);
+            } else if (d.getError() != null) {
+                graphics.drawCenteredString(this.font, d.getError(), cx, cy - 6,
+                        GuiColors.ERROR);
+                graphics.drawCenteredString(this.font, "Press Enter to try again",
+                        cx, cy + 6, GuiColors.TEXT_DIM);
+            } else if (!d.getQuery().isEmpty()) {
+                graphics.drawCenteredString(this.font,
+                        "No public schematics match \"" + d.getQuery() + "\"",
+                        cx, cy - 6, GuiColors.TEXT_SECONDARY);
+                graphics.drawCenteredString(this.font, "Clear the box to browse popular builds",
+                        cx, cy + 6, GuiColors.TEXT_DIM);
+            } else {
+                graphics.drawCenteredString(this.font, "No public schematics found",
+                        cx, cy, GuiColors.TEXT_SECONDARY);
+            }
+            return;
+        }
+
+        // My Library
+        if (!gridState.getSearchText().isEmpty()) {
+            graphics.drawCenteredString(this.font, "Nothing in your library matches",
+                    cx, cy, GuiColors.TEXT_SECONDARY);
+        } else if (LibraryState.get().isLibraryLoading()) {
+            graphics.drawCenteredString(this.font, "Loading your library...",
+                    cx, cy, GuiColors.TEXT_SECONDARY);
+        } else {
+            graphics.drawCenteredString(this.font, "Your library is empty",
+                    cx, cy - 6, GuiColors.TEXT_SECONDARY);
+            graphics.drawCenteredString(this.font, "Upload a build, or grab one from Discover",
+                    cx, cy + 6, GuiColors.TEXT_DIM);
+        }
     }
 
     private void renderTile(GuiGraphics graphics, GridState.SchematicTileEntry tile,
@@ -368,11 +752,22 @@ public class LibraryScreen extends Screen {
             }
         }
 
-        // Name below thumbnail
+        // Name below thumbnail, with the block count appended so size is visible
+        // before selecting. Oversized entries are colored so they stand out.
         String name = schematic.title() != null ? schematic.title() : "Untitled";
+        LoadLimits tileLimits = getLoadLimits(targetDevice);
+        boolean tileTooBig = schematic.hasBlockCount()
+                && tileLimits.exceedsHard(schematic.blockCount());
+        boolean tileOverSoft = schematic.hasBlockCount()
+                && tileLimits.exceedsSoft(schematic.blockCount());
+        if (schematic.hasBlockCount()) {
+            name += " (" + formatCountShort(schematic.blockCount()) + ")";
+        }
         String truncated = truncateToWidth(name, tileSize - 4);
-        int nameColor = selected ? GuiColors.SELECTED
-                : (hovered ? GuiColors.HOVER_TEXT : GuiColors.TILE_NAME);
+        int nameColor = tileTooBig ? GuiColors.ERROR
+                : (selected ? GuiColors.SELECTED
+                : (hovered ? GuiColors.HOVER_TEXT
+                : (tileOverSoft ? GuiColors.WARNING : GuiColors.TILE_NAME)));
         graphics.drawString(this.font, truncated, x + 2, y + tileThumbH + 2, nameColor, false);
 
         // Tooltip on hover
@@ -393,6 +788,22 @@ public class LibraryScreen extends Screen {
             if (schematic.downloadCount() > 0) {
                 tooltip.add(Component.literal(
                         "\u00a78" + schematic.downloadCount() + " downloads"));
+            }
+            if (schematic.hasDimensions()) {
+                tooltip.add(Component.literal("\u00a78" + schematic.dimensionsLabel()));
+            }
+            if (schematic.hasBlockCount()) {
+                LoadLimits limits = getLoadLimits(targetDevice);
+                int count = schematic.blockCount();
+                if (limits.exceedsHard(count)) {
+                    tooltip.add(Component.literal("\u00a7c" + formatCount(count)
+                            + " blocks, too big for " + targetDevice.getDisplayName()));
+                } else if (limits.exceedsSoft(count)) {
+                    tooltip.add(Component.literal("\u00a7e" + formatCount(count)
+                            + " blocks, above " + targetDevice.getDisplayName() + " limit"));
+                } else {
+                    tooltip.add(Component.literal("\u00a78" + formatCount(count) + " blocks"));
+                }
             }
             scheduleTooltip(tooltip, mouseX, mouseY);
         }
@@ -465,16 +876,42 @@ public class LibraryScreen extends Screen {
             graphics.drawString(this.font, title, INFO_X, barY + 6,
                     GuiColors.SELECTED, false);
 
-            String bundleId = gridState.getSelectedBundleId();
-            String bundleName = bundleId != null ? findBundleName(bundleId) : "Unbundled";
-            graphics.drawString(this.font,
-                    "\u00a77" + (bundleName != null ? bundleName : ""),
+            // In Discover the useful second line is who made it, not a bundle.
+            String subtitle;
+            if (gridState.isDiscover()) {
+                subtitle = selected.ownerName() != null
+                        ? "by " + selected.ownerName() : "public";
+            } else {
+                String bundleId = gridState.getSelectedBundleId();
+                String bundleName = bundleId != null ? findBundleName(bundleId) : "Unbundled";
+                subtitle = bundleName != null ? bundleName : "";
+            }
+            graphics.drawString(this.font, "\u00a77" + subtitle,
                     INFO_X, barY + 18, GuiColors.TEXT_SECONDARY, false);
 
-            if (selected.downloadCount() > 0) {
-                graphics.drawString(this.font,
-                        "\u00a78" + selected.downloadCount() + " downloads",
-                        INFO_X, barY + 28, GuiColors.TEXT_DIM, false);
+            String meta = selected.downloadCount() > 0
+                    ? selected.downloadCount() + " downloads"
+                    : "";
+            if (selected.hasBlockCount()) {
+                if (!meta.isEmpty()) meta += "  ";
+                meta += formatCount(selected.blockCount()) + " blocks";
+            }
+            if (selected.hasDimensions()) {
+                if (!meta.isEmpty()) meta += "  ";
+                meta += selected.dimensionsLabel();
+            }
+            if (!meta.isEmpty()) {
+                LoadLimits limits = getLoadLimits(targetDevice);
+                int metaColor = GuiColors.TEXT_DIM;
+                if (selected.hasBlockCount()) {
+                    if (limits.exceedsHard(selected.blockCount())) {
+                        metaColor = GuiColors.ERROR;
+                    } else if (limits.exceedsSoft(selected.blockCount())) {
+                        metaColor = GuiColors.WARNING;
+                    }
+                }
+                graphics.drawString(this.font, meta,
+                        INFO_X, barY + 28, metaColor, false);
             }
         }
 
@@ -516,8 +953,8 @@ public class LibraryScreen extends Screen {
 
         if (isOver(mouseX, mouseY, uploadBtnX, btnY, ACTION_BTN_W, ACTION_BTN_H)) {
             scheduleTooltip(List.of(
-                    Component.literal("Upload schematic"),
-                    Component.literal("\u00a78Shortcut: U")
+                    Component.literal("Upload a build"),
+                    Component.literal("\u00a78Shortcut: Ctrl+U")
             ), mouseX, mouseY);
         }
 
@@ -534,7 +971,7 @@ public class LibraryScreen extends Screen {
             scheduleTooltip(List.of(
                     Component.literal("Enter camera mode"),
                     Component.literal("\u00a78Take screenshots for upload"),
-                    Component.literal("\u00a78Shortcut: C")
+                    Component.literal("\u00a78Shortcut: Ctrl+K")
             ), mouseX, mouseY);
         }
 
@@ -554,27 +991,121 @@ public class LibraryScreen extends Screen {
         if (isOver(mouseX, mouseY, palBtnX, btnY, ACTION_BTN_W, ACTION_BTN_H)) {
             scheduleTooltip(List.of(
                     Component.literal("Change block palette"),
-                    Component.literal("\u00a78Swap blocks before loading")
+                    Component.literal("\u00a78Swap blocks before loading"),
+                    Component.literal("\u00a78Shortcut: Ctrl+P")
             ), mouseX, mouseY);
         }
 
+        // Focus ring for the Tab-cycled action, drawn last so it sits on top.
+        if (actionFocus != ACTION_NONE) {
+            int ringX = switch (actionFocus) {
+                case ACTION_LOAD -> INFO_X;
+                case ACTION_UPLOAD -> uploadBtnX;
+                case ACTION_CAMERA -> camBtnX;
+                default -> palBtnX;
+            };
+            int ringW = actionFocus == ACTION_LOAD ? LOAD_BTN_W : ACTION_BTN_W;
+            drawBorder(graphics, ringX - 1, btnY - 1, ringW + 2, ACTION_BTN_H + 2,
+                    GuiColors.SELECTED);
+        }
+
         // Right: Target device info
-        int targetX = this.width - TARGET_INFO_MARGIN;
-        graphics.drawString(this.font, "Target:", targetX, barY + 6,
+        renderTargetPanel(graphics, barY, mouseX, mouseY);
+    }
+
+    /**
+     * Bottom-right target panel.
+     *
+     * Shows the item that will receive the schematic, floating gently so it reads
+     * as live, and states plainly whether a target is resolved. Hovering lists
+     * every target Schematicraft can use and its current status, which is the
+     * answer to "what does this work with."
+     */
+    private void renderTargetPanel(GuiGraphics graphics, int barY, int mouseX, int mouseY) {
+        int panelX = this.width - TARGET_INFO_MARGIN;
+        boolean available = targetDevice.isAvailable();
+
+        graphics.drawString(this.font, "Target:", panelX, barY + 6,
                 GuiColors.TEXT_DIM, false);
-        if (targetDevice.isAvailable()) {
+
+        if (available) {
             int tColor = targetDevice.getMode() == TargetDevice.Mode.SERVER
                     ? GuiColors.TARGET_SERVER : GuiColors.TARGET_CLIENT;
             graphics.drawString(this.font, targetDevice.getDisplayName(),
-                    targetX, barY + 18, tColor, false);
+                    panelX, barY + 18, tColor, false);
             graphics.drawString(this.font, "\u00a78" + targetDevice.getModeLabel(),
-                    targetX, barY + 30, GuiColors.TEXT_DIM, false);
+                    panelX, barY + 30, GuiColors.TEXT_DIM, false);
         } else {
-            graphics.drawString(this.font, "None", targetX, barY + 18,
+            graphics.drawString(this.font, "None", panelX, barY + 18,
                     GuiColors.TARGET_NONE, false);
-            graphics.drawString(this.font, "\u00a78Hold gadget/open table",
-                    targetX, barY + 30, GuiColors.TEXT_DIM, false);
+            graphics.drawString(this.font, "\u00a78Hold a gadget or open a table",
+                    panelX, barY + 30, GuiColors.TEXT_DIM, false);
         }
+
+        // Icon slot, right of the text.
+        int slotX = this.width - TARGET_ICON_SIZE - GRID_PADDING;
+        int slotY = barY + 20;
+        TargetCatalog.Entry entry = available
+                ? TargetCatalog.get(targetDevice.getType()) : null;
+        ItemStack icon = entry != null ? entry.icon() : ItemStack.EMPTY;
+
+        if (!icon.isEmpty()) {
+            // Slow bob. Items are flat sprites, so vertical motion reads as
+            // "active" where a spin would just make them vanish edge-on.
+            float phase = (System.currentTimeMillis() % 2000L) / 2000f;
+            int bob = (int) Math.round(Math.sin(phase * Math.PI * 2) * 2.0);
+
+            // Soft halo behind the icon so it reads as connected, not decorative.
+            graphics.fill(slotX - 2, slotY - 2 + bob,
+                    slotX + TARGET_ICON_SIZE + 2, slotY + TARGET_ICON_SIZE + 2 + bob,
+                    0x2055FF55);
+            graphics.renderItem(icon, slotX, slotY + bob);
+        } else {
+            // No target: an empty slot outline, so the space does not look broken.
+            graphics.fill(slotX, slotY, slotX + TARGET_ICON_SIZE,
+                    slotY + TARGET_ICON_SIZE, 0x30FFFFFF);
+            drawBorder(graphics, slotX, slotY, TARGET_ICON_SIZE, TARGET_ICON_SIZE,
+                    GuiColors.BORDER_DARK);
+            graphics.drawCenteredString(this.font, "?",
+                    slotX + TARGET_ICON_SIZE / 2, slotY + 4, GuiColors.TEXT_DIM);
+        }
+
+        // Hovering the panel or the icon explains compatibility.
+        boolean hoverPanel = isOver(mouseX, mouseY, panelX, barY + 4,
+                TARGET_INFO_MARGIN, BOTTOM_BAR_H - 8);
+        if (hoverPanel) {
+            scheduleTooltip(buildCompatibilityTooltip(), mouseX, mouseY);
+        }
+    }
+
+    /**
+     * The compatibility list: every target Schematicraft supports, marked with
+     * whether it is in use, ready, or unavailable because the mod is absent.
+     */
+    private List<Component> buildCompatibilityTooltip() {
+        List<Component> lines = new ArrayList<>();
+        lines.add(Component.literal("Loads into"));
+
+        if (TargetCatalog.isEmpty()) {
+            lines.add(Component.literal("\u00a77No editor integrations active"));
+            return lines;
+        }
+
+        for (TargetCatalog.Entry entry : TargetCatalog.all()) {
+            boolean isCurrent = targetDevice.isAvailable()
+                    && targetDevice.getType() == entry.type();
+            if (isCurrent) {
+                lines.add(Component.literal("\u00a7a\u25b6 " + entry.label()
+                        + " \u00a78(active)"));
+            } else if (entry.isInstalled()) {
+                lines.add(Component.literal("\u00a7f\u2022 " + entry.label()));
+                lines.add(Component.literal("\u00a78    " + entry.howToUse()));
+            } else {
+                lines.add(Component.literal("\u00a78\u2022 " + entry.label()
+                        + " (not installed)"));
+            }
+        }
+        return lines;
     }
 
     private void renderStatusBar(GuiGraphics graphics) {
@@ -592,13 +1123,11 @@ public class LibraryScreen extends Screen {
         String status = gridState.getStatusText();
         if (!status.isEmpty()) {
             graphics.drawCenteredString(this.font, status,
-                    this.width / 2, y + 3, statusColor);
+                    this.width / 2, y + 3, gridState.getStatusColor());
         }
 
-        // Right: keyboard hints
-        String hints = searchField != null && searchField.isFocused()
-                ? "Esc: clear search | Arrows: navigate"
-                : "/ : search | Arrows: navigate | Enter: load | Esc: close";
+        // Right: keyboard hints. Fixed, because the keys never change meaning.
+        String hints = "Type: filter | Arrows: navigate | Enter: load | Esc: back";
         int hintsW = this.font.width(hints);
         graphics.drawString(this.font, hints,
                 this.width - hintsW - GRID_PADDING, y + 3, GuiColors.TEXT_DIM, false);
@@ -608,129 +1137,208 @@ public class LibraryScreen extends Screen {
     // Input Handling
     // --------------------------------------------------
 
+    /**
+     * Keyboard model: printable characters always filter, everything else always
+     * drives the grid. There is no focus mode, so a given keystroke always means
+     * the same thing. Commands use Ctrl so they never collide with typing.
+     *
+     * Routing order:
+     * 1. Esc, layered by scope (overlay, then filter, then screen)
+     * 2. Ctrl combos (bundles and commands)
+     * 3. Tab, cycles the action buttons for keyboard-only access
+     * 4. Navigation and activation (arrows, Home/End, Page keys, Enter)
+     * 5. Everything else falls through to the search field (backspace, Ctrl+A/C/V)
+     */
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
         boolean ctrl = (modifiers & GLFW.GLFW_MOD_CONTROL) != 0;
         boolean shift = (modifiers & GLFW.GLFW_MOD_SHIFT) != 0;
 
-        // Layered Esc
+        // --- 1. Layered Esc, ordered by scope, not by focus ---
         if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
             if (previewExpanded) {
                 previewExpanded = false;
                 return true;
             }
-            if (searchField != null && searchField.isFocused()
-                    && !searchField.getValue().isEmpty()) {
-                searchField.setValue("");
-                gridState.setSearchText("");
-                recomputeMaxScroll();
+            if (actionFocus != ACTION_NONE) {
+                actionFocus = ACTION_NONE;
+                return true;
+            }
+            if (searchField != null && !searchField.getValue().isEmpty()) {
+                clearSearch();
                 return true;
             }
             this.onClose();
             return true;
         }
 
-        // Ctrl+Tab / Ctrl+Shift+Tab: cycle bundle tabs
+        // --- 2. Ctrl combos ---
+        // Bundle hotkeys work from either scope, switching to the library if needed.
         if (ctrl && keyCode == GLFW.GLFW_KEY_TAB) {
+            switchScope(GridState.Scope.MY_LIBRARY);
             if (shift) gridState.prevBundle(); else gridState.nextBundle();
-            recomputeMaxScroll();
+            afterBundleChange();
             return true;
         }
-
-        // Ctrl+1-7: jump to pinned bundle
         if (ctrl && keyCode >= GLFW.GLFW_KEY_1 && keyCode <= GLFW.GLFW_KEY_7) {
             int idx = keyCode - GLFW.GLFW_KEY_1;
             if (idx < gridState.getPinnedBundles().size()) {
-                gridState.setActiveBundleIndex(idx);
-                recomputeMaxScroll();
+                selectBundle(idx);
             }
             return true;
         }
-
-        // If search field is focused, swallow all keys except Tab (AE2 pattern)
-        if (searchField != null && searchField.isFocused()) {
-            if (keyCode == GLFW.GLFW_KEY_TAB) {
-                searchField.setFocused(false);
-                return true;
-            }
-            return super.keyPressed(keyCode, scanCode, modifiers);
-        }
-
-        // / or Ctrl+F: focus search
-        if (keyCode == GLFW.GLFW_KEY_SLASH || (ctrl && keyCode == GLFW.GLFW_KEY_F)) {
-            if (searchField != null) {
-                searchField.setFocused(true);
-                this.setFocused(searchField);
-            }
+        if (ctrl && keyCode == GLFW.GLFW_KEY_U) {
+            openUploadScreen();
             return true;
         }
-
-        // Arrow keys: 2D grid navigation
-        if (keyCode == GLFW.GLFW_KEY_LEFT) {
-            gridState.moveSelection(COLS, -1, 0);
-            ensureSelectedVisible();
-            return true;
-        }
-        if (keyCode == GLFW.GLFW_KEY_RIGHT) {
-            gridState.moveSelection(COLS, 1, 0);
-            ensureSelectedVisible();
-            return true;
-        }
-        if (keyCode == GLFW.GLFW_KEY_UP) {
-            gridState.moveSelection(COLS, 0, -1);
-            ensureSelectedVisible();
-            return true;
-        }
-        if (keyCode == GLFW.GLFW_KEY_DOWN) {
-            gridState.moveSelection(COLS, 0, 1);
-            ensureSelectedVisible();
-            return true;
-        }
-
-        // Enter: load selected
-        if (keyCode == GLFW.GLFW_KEY_ENTER || keyCode == GLFW.GLFW_KEY_KP_ENTER) {
-            loadSelectedSchematic();
-            return true;
-        }
-
-        // C: camera mode
-        if (keyCode == GLFW.GLFW_KEY_C) {
+        if (ctrl && keyCode == GLFW.GLFW_KEY_K) {
             enterCameraMode();
             return true;
         }
-
-        // U: upload
-        if (keyCode == GLFW.GLFW_KEY_U) {
-            setStatus("Upload not yet implemented in standalone screen",
-                    GuiColors.INFO, 3000);
+        if (ctrl && keyCode == GLFW.GLFW_KEY_P) {
+            openPaletteScreen();
             return true;
         }
 
+        // --- 3. Tab cycles the action buttons (visible focus ring) ---
+        if (keyCode == GLFW.GLFW_KEY_TAB) {
+            cycleActionFocus(shift ? -1 : 1);
+            return true;
+        }
+
+        // --- 4. Navigation and activation, always the grid ---
+        if (keyCode == GLFW.GLFW_KEY_LEFT) {
+            moveGrid(-1, 0);
+            return true;
+        }
+        if (keyCode == GLFW.GLFW_KEY_RIGHT) {
+            moveGrid(1, 0);
+            return true;
+        }
+        if (keyCode == GLFW.GLFW_KEY_UP) {
+            moveGrid(0, -1);
+            return true;
+        }
+        if (keyCode == GLFW.GLFW_KEY_DOWN) {
+            moveGrid(0, 1);
+            return true;
+        }
+        if (keyCode == GLFW.GLFW_KEY_PAGE_UP) {
+            gridState.scroll(-gridHeight);
+            gridState.clampScroll(maxScroll);
+            return true;
+        }
+        if (keyCode == GLFW.GLFW_KEY_PAGE_DOWN) {
+            gridState.scroll(gridHeight);
+            gridState.clampScroll(maxScroll);
+            return true;
+        }
+        if (keyCode == GLFW.GLFW_KEY_HOME) {
+            if (gridState.getSchematicCount() > 0) {
+                gridState.setSelectedIndex(0);
+                ensureSelectedVisible();
+            }
+            return true;
+        }
+        if (keyCode == GLFW.GLFW_KEY_END) {
+            int count = gridState.getSchematicCount();
+            if (count > 0) {
+                gridState.setSelectedIndex(count - 1);
+                ensureSelectedVisible();
+            }
+            return true;
+        }
+        if (keyCode == GLFW.GLFW_KEY_ENTER || keyCode == GLFW.GLFW_KEY_KP_ENTER) {
+            // In Discover, an unsent query means Enter submits the search rather
+            // than loading, which is what the box invites you to do.
+            if (gridState.isDiscover() && discoverPendingQuery != null) {
+                String q = discoverPendingQuery.trim();
+                discoverPendingQuery = null;
+                submitDiscoverQuery(q);
+                return true;
+            }
+            // Enter activates a Tab-focused action, otherwise loads the selection.
+            if (actionFocus != ACTION_NONE) {
+                activateFocusedAction();
+            } else {
+                loadSelectedSchematic();
+            }
+            return true;
+        }
+
+        // --- 5. Everything else goes to the search field ---
+        // Backspace, Delete, Ctrl+A/C/V and friends. The field is permanently
+        // focused, so this also swallows the inventory key and stops it closing
+        // the screen while typing.
+        if (searchField != null) {
+            return searchField.keyPressed(keyCode, scanCode, modifiers);
+        }
         return super.keyPressed(keyCode, scanCode, modifiers);
     }
 
     @Override
     public boolean charTyped(char codePoint, int modifiers) {
-        // Suppress the keybind character that leaks through on the frame the screen opens
+        // Swallow the character from the keybind that opened this screen, which
+        // arrives on the first frame and would otherwise seed the filter.
         if (suppressNextChar) {
             suppressNextChar = false;
             return true;
         }
 
-        // If search field is not focused, redirect typing to it (AE2 pattern)
-        if (searchField != null && !searchField.isFocused()) {
-            // Don't redirect shortcut chars when search is empty
-            if (gridState.getSearchText().isEmpty()) {
-                if (codePoint == 'c' || codePoint == 'C'
-                        || codePoint == 'u' || codePoint == 'U') {
-                    return false;
-                }
-            }
-            searchField.setFocused(true);
-            this.setFocused(searchField);
+        // Typing always filters. No exceptions, no letter commands.
+        if (searchField != null) {
             return searchField.charTyped(codePoint, modifiers);
         }
         return super.charTyped(codePoint, modifiers);
+    }
+
+    // --------------------------------------------------
+    // Input helpers
+    // --------------------------------------------------
+
+    private void clearSearch() {
+        searchField.setValue("");
+        gridState.setSearchText("");
+        pendingSearchText = null;
+        recomputeMaxScroll();
+        if (gridState.getSchematicCount() > 0) {
+            gridState.setSelectedIndex(0);
+            ensureSelectedVisible();
+        }
+    }
+
+    private void moveGrid(int dx, int dy) {
+        // Any navigation leaves action-button focus, so Enter means "load" again.
+        actionFocus = ACTION_NONE;
+        gridState.moveSelection(COLS, dx, dy);
+        ensureSelectedVisible();
+    }
+
+    private void afterBundleChange() {
+        recomputeMaxScroll();
+        actionFocus = ACTION_NONE;
+        if (gridState.getSchematicCount() > 0) {
+            gridState.setSelectedIndex(0);
+            gridState.setScrollOffset(0);
+            ensureSelectedVisible();
+        }
+    }
+
+    private void cycleActionFocus(int direction) {
+        // Cycles NONE -> Load -> Upload -> Camera -> Palette -> NONE
+        actionFocus += direction;
+        if (actionFocus < ACTION_NONE) actionFocus = ACTION_PALETTE;
+        if (actionFocus > ACTION_PALETTE) actionFocus = ACTION_NONE;
+    }
+
+    private void activateFocusedAction() {
+        switch (actionFocus) {
+            case ACTION_LOAD -> loadSelectedSchematic();
+            case ACTION_UPLOAD -> openUploadScreen();
+            case ACTION_CAMERA -> enterCameraMode();
+            case ACTION_PALETTE -> openPaletteScreen();
+            default -> { }
+        }
     }
 
     @Override
@@ -752,10 +1360,9 @@ public class LibraryScreen extends Screen {
                 && mouseX < this.width - SCROLLBAR_W) {
             int tileIdx = getTileIndexAt(mouseX, mouseY);
             if (tileIdx >= 0 && button == 0) {
-                // Unfocus search so arrow keys and Enter work for grid navigation
-                if (searchField != null) {
-                    searchField.setFocused(false);
-                }
+                // Search keeps focus. Clicking a tile only changes the selection,
+                // so Enter still loads and typing still filters.
+                actionFocus = ACTION_NONE;
                 long now = System.currentTimeMillis();
                 if (tileIdx == lastClickIndex && now - lastClickTime < DOUBLE_CLICK_MS) {
                     gridState.setSelectedIndex(tileIdx);
@@ -790,6 +1397,7 @@ public class LibraryScreen extends Screen {
             int scrollAmount = (int) (-scrollY * (tileTotalH + TILE_GAP));
             gridState.scroll(scrollAmount);
             gridState.clampScroll(maxScroll);
+            maybeLoadMoreDiscover();
             return true;
         }
         return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
@@ -810,14 +1418,24 @@ public class LibraryScreen extends Screen {
     // Actions
     // --------------------------------------------------
 
+    /**
+     * Loads the user's library.
+     *
+     * This runs in both scopes, because the bundle tabs and their Ctrl+1-7 hotkeys
+     * are visible from Discover too. Progress is only reported when the library is
+     * the visible list, so it does not fight the discover feed for the status bar.
+     */
     private void loadLibrary() {
-        setStatus("Loading library...", GuiColors.INFO, 0);
+        boolean visible = !gridState.isDiscover();
+        if (visible) setStatus("Loading library...", GuiColors.INFO, 0);
         SchematiCraftAPIWrapper.get().loadLibrary().thenRun(() -> {
             Minecraft.getInstance().execute(() -> {
                 gridState.onLibraryUpdated();
                 recomputeMaxScroll();
-                int count = gridState.getSchematicCount();
-                setStatus(count + " schematics loaded", GuiColors.SUCCESS, 3000);
+                if (!gridState.isDiscover()) {
+                    setStatus(gridState.getSchematicCount() + " schematics loaded",
+                            GuiColors.SUCCESS, 3000);
+                }
             });
         }).exceptionally(ex -> {
             Minecraft.getInstance().execute(() -> {
@@ -840,22 +1458,52 @@ public class LibraryScreen extends Screen {
             return;
         }
 
+        // Fail fast before spending a download. The authoritative size check
+        // still happens after conversion, but when the server told us the block
+        // count we can refuse immediately and explain why.
+        LoadLimits limits = getLoadLimits(targetDevice);
+        if (selected.hasBlockCount() && limits.exceedsHard(selected.blockCount())) {
+            setStatus("Too big for " + targetDevice.getDisplayName() + ": "
+                            + formatCount(selected.blockCount()) + " blocks, limit "
+                            + formatCount(limits.hard()),
+                    GuiColors.ERROR, 8000);
+            return;
+        }
+
         setStatus("Downloading...", GuiColors.INFO, 0);
         SchematiCraftAPIWrapper.get().downloadSchematic(
                 selected.id(), targetDevice.getDownloadFormat(), targetDevice.getDownloadEditor())
                 .thenAccept(result -> {
             Minecraft.getInstance().execute(() -> {
                 try {
+                    long fileBytes = Files.size(result.file);
+
+                    // Deterministic self-protection, before anything expensive.
+                    // Parsing holds the bytes, a String copy, a JSON tree, and an
+                    // SNBT tree in memory at once, so an oversized payload freezes
+                    // or crashes the client. Refuse here, and never cache it.
+                    if (limits.maxBytes() > 0 && fileBytes > limits.maxBytes()) {
+                        Files.deleteIfExists(result.file);
+                        setStatus("Too large to load safely: "
+                                        + formatBytes(fileBytes) + " (limit "
+                                        + formatBytes(limits.maxBytes()) + ")",
+                                GuiColors.ERROR, 8000);
+                        LOGGER.warn("Refused oversized payload for {}: {} bytes, limit {}",
+                                selected.id(), fileBytes, limits.maxBytes());
+                        SchematiCraftAPIWrapper.get().submitFailureFeedback(
+                                result.downloadId, "other",
+                                "Refused before parsing: " + fileBytes
+                                        + " bytes exceeds client limit " + limits.maxBytes()
+                                        + " for target " + targetDevice.getType());
+                        return;
+                    }
+
                     byte[] data = Files.readAllBytes(result.file);
                     Files.deleteIfExists(result.file);
 
-                    // Cache the downloaded data for palette editing
+                    // Cache the downloaded data for previews
                     com.schematicraft.lib.core.SchematicDataCache.get()
                             .put(selected.id(), data);
-
-                    // DEBUG: dump first 500 chars of downloaded data
-                    String preview = new String(data, 0, Math.min(data.length, 500));
-                    LOGGER.info("[DEBUG] Downloaded JSON preview: {}", preview);
 
                     LoadResult loadResult = dispatchLoad(data);
                     if (loadResult.success()) {
@@ -865,6 +1513,14 @@ public class LibraryScreen extends Screen {
                             setStatus("Loaded: " + title + " (" + loadResult.droppedBlockTypes().size()
                                     + " unknown block types dropped)", GuiColors.WARNING, 5000);
                             LOGGER.warn("Dropped block types: {}", loadResult.droppedBlockTypes());
+                        } else if (selected.hasBlockCount()
+                                && limits.exceedsSoft(selected.blockCount())) {
+                            // Loaded, but past what this editor was built for.
+                            // Say so rather than implying everything is routine.
+                            setStatus("Loaded: " + title + " ("
+                                            + formatCount(selected.blockCount())
+                                            + " blocks, may be slow to paste)",
+                                    GuiColors.WARNING, 5000);
                         } else {
                             setStatus("Loaded: " + title, GuiColors.SUCCESS, 3000);
                         }
@@ -872,13 +1528,18 @@ public class LibraryScreen extends Screen {
                                 .submitSuccessFeedback(result.downloadId);
                         this.onClose();
                     } else {
-                        setStatus("Failed to load into target",
-                                GuiColors.ERROR, 4000);
+                        // Stay on the screen so the user can read why and pick
+                        // something else, rather than closing onto an unchanged tool.
+                        String reason = loadResult.reason() != null
+                                ? loadResult.reason()
+                                : "Could not load into " + targetDevice.getDisplayName();
+                        setStatus(reason, GuiColors.ERROR, 8000);
+                        LOGGER.warn("Load failed for {}: {}", selected.id(), reason);
                         SchematiCraftAPIWrapper.get().submitFailureFeedback(
                                 result.downloadId,
                                 "import_error_or_crash",
-                                "LibraryScreen dispatch returned false. Target: "
-                                        + targetDevice.getType());
+                                "Load failed. Target: " + targetDevice.getType()
+                                        + ". Reason: " + reason);
                     }
                 } catch (Exception e) {
                     setStatus("Error: " + e.getMessage(), GuiColors.ERROR, 4000);
@@ -896,26 +1557,37 @@ public class LibraryScreen extends Screen {
 
     /**
      * Dispatch downloaded schematic data to the resolved target device.
-     * Editor mods register their handler via setLoadHandler().
+     * Editor mods register a handler per target via setLoadHandler().
      */
     private LoadResult dispatchLoad(byte[] data) {
-        if (loadHandler != null) {
-            return loadHandler.load(targetDevice, data);
+        LoadHandler handler = getLoadHandler(targetDevice);
+        if (handler != null) {
+            return handler.load(targetDevice, data);
         }
-        LOGGER.warn("No load handler registered for LibraryScreen");
+        LOGGER.warn("No load handler registered for target {}", targetDevice.getType());
         return LoadResult.failure();
     }
 
-    /** Result from a load operation. */
-    public record LoadResult(boolean success, int blocksLoaded, List<String> droppedBlockTypes) {
+    /**
+     * Result from a load operation.
+     *
+     * {@code reason} carries a short user-facing explanation on failure, so the
+     * screen can say why instead of showing a generic error. Editors should
+     * always supply one.
+     */
+    public record LoadResult(boolean success, int blocksLoaded,
+                             List<String> droppedBlockTypes, @Nullable String reason) {
         public static LoadResult success(int blocksLoaded) {
-            return new LoadResult(true, blocksLoaded, List.of());
+            return new LoadResult(true, blocksLoaded, List.of(), null);
         }
         public static LoadResult partial(int blocksLoaded, List<String> droppedBlockTypes) {
-            return new LoadResult(true, blocksLoaded, droppedBlockTypes);
+            return new LoadResult(true, blocksLoaded, droppedBlockTypes, null);
+        }
+        public static LoadResult failure(String reason) {
+            return new LoadResult(false, 0, List.of(), reason);
         }
         public static LoadResult failure() {
-            return new LoadResult(false, 0, List.of());
+            return new LoadResult(false, 0, List.of(), null);
         }
         public boolean hasDroppedBlocks() {
             return !droppedBlockTypes.isEmpty();
@@ -928,17 +1600,66 @@ public class LibraryScreen extends Screen {
         LoadResult load(TargetDevice target, byte[] schematicData);
     }
 
-    private static LoadHandler loadHandler = null;
+    /**
+     * Load handlers keyed by target type.
+     *
+     * Keyed rather than a single handler so multiple editors can coexist in one
+     * mod. With both Building Gadgets and Create installed, a single slot would
+     * mean the last registration silently wins.
+     */
+    private static final java.util.Map<TargetDevice.Type, LoadHandler> loadHandlers =
+            new java.util.EnumMap<>(TargetDevice.Type.class);
 
-    /** Register the editor-specific load handler. Called once during mod init. */
-    public static void setLoadHandler(LoadHandler handler) {
-        loadHandler = handler;
+    /** Register the load handler for a target. Called once during client setup. */
+    public static void setLoadHandler(TargetDevice.Type type, LoadHandler handler) {
+        loadHandlers.put(type, handler);
     }
 
-    /** Get the registered load handler (used by PaletteScreen). */
+    /** Block-count limits per target, declared by each editor integration. */
+    private static final java.util.Map<TargetDevice.Type, LoadLimits> loadLimits =
+            new java.util.EnumMap<>(TargetDevice.Type.class);
+
+    /** Register block-count limits for a target. Called once during client setup. */
+    public static void setLoadLimits(TargetDevice.Type type, LoadLimits limits) {
+        loadLimits.put(type, limits);
+    }
+
+    /** Limits for a target, or UNLIMITED when the editor declared none. */
+    public static LoadLimits getLoadLimits(TargetDevice target) {
+        return loadLimits.getOrDefault(target.getType(), LoadLimits.UNLIMITED);
+    }
+
+    /** Thousands-separated count for user-facing messages. */
+    private static String formatCount(int count) {
+        return String.format("%,d", count);
+    }
+
+    /** Compact byte size for user-facing messages. */
+    private static String formatBytes(long bytes) {
+        if (bytes >= 1024L * 1024L) {
+            return String.format("%.1f MB", bytes / (1024.0 * 1024.0));
+        }
+        return Math.max(1L, bytes / 1024L) + " KB";
+    }
+
+    /**
+     * Compact block count for tile labels, e.g. 44.7M or 250k.
+     * Tiles are narrow, so the full thousands-separated form does not fit.
+     */
+    private static String formatCountShort(int count) {
+        if (count >= 1_000_000) {
+            return String.format("%.1fM", count / 1_000_000.0);
+        }
+        if (count >= 1_000) {
+            return (count / 1000) + "k";
+        }
+        return String.valueOf(count);
+    }
+
+    /** Get the handler for a resolved target, or null when none is registered. */
     @Nullable
-    public static LoadHandler getLoadHandler() {
-        return loadHandler;
+    public static LoadHandler getLoadHandler(TargetDevice target) {
+        return loadHandlers.get(target.getType());
     }
 
     private void enterCameraMode() {
@@ -961,6 +1682,28 @@ public class LibraryScreen extends Screen {
         });
     }
 
+    private void openUploadScreen() {
+        if (uploadSource == null) {
+            setStatus("Uploading is not available for this editor",
+                    GuiColors.WARNING, 3000);
+            return;
+        }
+        Minecraft.getInstance().setScreen(new UploadScreen(uploadSource));
+    }
+
+    /** Editor-specific upload source. Registered once during mod init. */
+    private static UploadSource uploadSource = null;
+
+    /** Register the editor's upload source. Called once during client setup. */
+    public static void setUploadSource(UploadSource source) {
+        uploadSource = source;
+    }
+
+    @Nullable
+    public static UploadSource getUploadSource() {
+        return uploadSource;
+    }
+
     private void openPaletteScreen() {
         SchematicEntry selected = gridState.getSelectedSchematic();
         if (selected == null) {
@@ -975,28 +1718,46 @@ public class LibraryScreen extends Screen {
     // --------------------------------------------------
 
     private void handleTabBarClick(double mouseX, double mouseY, int button) {
-        int x = GRID_PADDING;
-
-        String allLabel = "All";
-        int allW = this.font.width(allLabel) + TAB_PAD_INNER;
-        if (isOver((int) mouseX, (int) mouseY, x, TAB_Y_OFFSET, allW, TAB_H)) {
-            gridState.setActiveBundleIndex(-1);
-            recomputeMaxScroll();
+        // Scope tabs take priority; they are drawn leftmost.
+        if (discoverTabX >= 0 && isOver((int) mouseX, (int) mouseY,
+                discoverTabX, TAB_Y_OFFSET, discoverTabW, TAB_H)) {
+            switchScope(GridState.Scope.DISCOVER);
             return;
         }
-        x += allW + TAB_PAD_X;
+        if (libraryTabX >= 0 && isOver((int) mouseX, (int) mouseY,
+                libraryTabX, TAB_Y_OFFSET, libraryTabW, TAB_H)) {
+            switchScope(GridState.Scope.MY_LIBRARY);
+            return;
+        }
 
-        List<GridState.BundleTabInfo> pinned = gridState.getPinnedBundles();
-        for (int i = 0; i < pinned.size(); i++) {
-            String label = "[" + (i + 1) + "] " + truncate(pinned.get(i).name(), TAB_NAME_MAX_LEN);
-            int tabW = this.font.width(label) + TAB_PAD_INNER;
-            if (isOver((int) mouseX, (int) mouseY, x, TAB_Y_OFFSET, tabW, TAB_H)) {
-                gridState.setActiveBundleIndex(i);
-                recomputeMaxScroll();
+        // "+" first: its bounds come from the last render, so it always matches.
+        if (plusTabX >= 0 && isOver((int) mouseX, (int) mouseY,
+                plusTabX, TAB_Y_OFFSET, plusTabW, TAB_H)) {
+            Minecraft.getInstance().setScreen(new NewBundleScreen(new LibraryScreen(), null));
+            return;
+        }
+
+        // Bundle tabs, using the bounds recorded during render. Index 0 is "All".
+        for (int i = 0; i < bundleTabBounds.size(); i++) {
+            int[] b = bundleTabBounds.get(i);
+            if (isOver((int) mouseX, (int) mouseY, b[0], TAB_Y_OFFSET, b[1], TAB_H)) {
+                selectBundle(i - 1);
                 return;
             }
-            x += tabW + TAB_PAD_X;
         }
+    }
+
+    /**
+     * Selects a bundle, switching to the library first if needed.
+     *
+     * Bundle tabs and their hotkeys are visible from Discover too, so using one is
+     * an implicit "take me to my library, at this bundle" rather than a no-op.
+     */
+    private void selectBundle(int index) {
+        switchScope(GridState.Scope.MY_LIBRARY);
+        gridState.setActiveBundleIndex(index);
+        actionFocus = ACTION_NONE;
+        recomputeMaxScroll();
     }
 
     private void handleBottomBarClick(double mouseX, double mouseY, int button) {
@@ -1021,8 +1782,7 @@ public class LibraryScreen extends Screen {
         // Upload button
         int uploadBtnX = INFO_X + LOAD_BTN_W + BTN_GAP;
         if (isOver(mx, my, uploadBtnX, btnY, ACTION_BTN_W, ACTION_BTN_H)) {
-            setStatus("Upload not yet implemented in standalone screen",
-                    GuiColors.INFO, 3000);
+            openUploadScreen();
             return;
         }
 
@@ -1216,13 +1976,7 @@ public class LibraryScreen extends Screen {
     // --------------------------------------------------
 
     private void setStatus(String text, int color, int durationMs) {
-        gridState.setStatus(text, durationMs);
-        this.statusColor = color;
-        if (durationMs > 0) {
-            this.statusClearAt = System.currentTimeMillis() + durationMs;
-        } else {
-            this.statusClearAt = 0;
-        }
+        gridState.setStatus(text, color, durationMs);
     }
 
     private void scheduleTooltip(List<Component> lines, int x, int y) {
