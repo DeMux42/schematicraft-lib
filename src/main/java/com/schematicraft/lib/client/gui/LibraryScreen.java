@@ -30,7 +30,9 @@ import java.util.List;
  * Opens via H keybind or editor GUI buttons. 8-column tile grid with bundle tabs,
  * always-active search, and bottom bar with info/actions.
  *
- * Accepts a nullable TargetDevice.OpenContext so it can be opened from tables or keybind.
+ * Carries an {@link EditorJourney} supplied by a native editor entry point or
+ * the shared keybind. The journey keeps destination, source, and return path
+ * intact while child screens are opened.
  */
 public class LibraryScreen extends Screen implements SchematicraftScreen {
     private static final Logger LOGGER = LogUtils.getLogger();
@@ -64,6 +66,8 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
     private static final int BTN_Y_OFFSET = 40;
     private static final int TARGET_INFO_MARGIN = 140;
     private static final int TARGET_ICON_SIZE = 16;
+    /** Space between a device icon and the slot it writes into. */
+    private static final int TARGET_SLOT_GAP = 9;
     private static final String PLUS_LABEL = "+";
     private static final int SEARCH_DEBOUNCE_MS = 150;
     private static final int DOUBLE_CLICK_MS = 400;
@@ -81,6 +85,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
 
     // State (persists across init calls / resizes)
     private final GridState gridState = new GridState();
+    private final EditorJourney journey;
     private final TargetDevice targetDevice;
 
     // Widgets
@@ -99,6 +104,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
     private static List<Path> pendingCameraImages = null;
     private static String pendingCameraSchematicId = null;
     private static String pendingCameraSchematicTitle = null;
+    private static EditorJourney pendingCameraJourney = null;
 
     // Tooltip state (collected during render, drawn last)
     private List<Component> pendingTooltip = null;
@@ -153,14 +159,15 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
     // Suppress the first charTyped after opening (keybind char leaks into search)
     private boolean suppressNextChar = true;
 
-    public LibraryScreen(@Nullable TargetDevice.OpenContext openContext) {
+    public LibraryScreen(EditorJourney journey) {
         super(Component.literal("Schematicraft Library"));
-        this.targetDevice = TargetDevice.resolve(openContext);
+        this.journey = journey;
+        this.targetDevice = journey.target();
     }
 
-    /** Convenience: open with no context (keybind). */
+    /** Convenience: resolve the current held-item journey. */
     public LibraryScreen() {
-        this(null);
+        this(EditorJourney.resolveHeld());
     }
 
     // --------------------------------------------------
@@ -230,6 +237,8 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
         if (handoffStatus != null) {
             setStatus(handoffStatus, handoffStatusColor, handoffStatusDurationMs);
             handoffStatus = null;
+        } else if (journey.openingNotice() != null) {
+            setStatus(journey.openingNotice(), GuiColors.WARNING, 8000);
         }
     }
 
@@ -440,6 +449,11 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
     @Override
     public boolean isPauseScreen() {
         return false;
+    }
+
+    @Override
+    public void onClose() {
+        journey.returnToOrigin();
     }
 
     // --------------------------------------------------
@@ -931,6 +945,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
             if (loadEnabled) {
                 scheduleTooltip(List.of(
                         Component.literal(targetDevice.getLoadButtonText()),
+                        Component.literal("\u00a77" + targetDevice.getDestinationHint()),
                         Component.literal("\u00a78Enter to load"),
                         Component.literal("\u00a78Mode: " + targetDevice.getModeLabel())
                 ), mouseX, mouseY);
@@ -942,18 +957,29 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
             }
         }
 
-        // Upload button
+        // Upload button. Availability belongs to this journey, not to whichever
+        // editor happened to initialize last.
         int uploadBtnX = INFO_X + LOAD_BTN_W + BTN_GAP;
+        UploadSource uploadSource = journey.uploadSource();
+        boolean uploadEnabled = uploadSource != null && uploadSource.isReady();
+        int uploadBg = uploadEnabled ? GuiColors.BTN_UPLOAD_BG : GuiColors.BTN_BG;
+        int uploadBorder = uploadEnabled ? GuiColors.BTN_UPLOAD_BORDER : GuiColors.BORDER_DARK;
+        int uploadText = uploadEnabled ? GuiColors.BTN_UPLOAD_TEXT : GuiColors.TEXT_DISABLED;
         graphics.fill(uploadBtnX, btnY, uploadBtnX + ACTION_BTN_W,
-                btnY + ACTION_BTN_H, GuiColors.BTN_UPLOAD_BG);
+                btnY + ACTION_BTN_H, uploadBg);
         drawBorder(graphics, uploadBtnX, btnY, ACTION_BTN_W,
-                ACTION_BTN_H, GuiColors.BTN_UPLOAD_BORDER);
+                ACTION_BTN_H, uploadBorder);
         graphics.drawCenteredString(this.font, "Upload",
-                uploadBtnX + ACTION_BTN_W / 2, btnY + 4, GuiColors.BTN_UPLOAD_TEXT);
+                uploadBtnX + ACTION_BTN_W / 2, btnY + 4, uploadText);
 
         if (isOver(mouseX, mouseY, uploadBtnX, btnY, ACTION_BTN_W, ACTION_BTN_H)) {
+            String sourceLine = uploadSource == null
+                    ? "No upload source here"
+                    : (uploadEnabled ? "From " + uploadSource.displayName()
+                    : uploadSource.emptyHint());
             scheduleTooltip(List.of(
-                    Component.literal("Upload a build"),
+                    Component.literal(uploadEnabled ? "Upload build" : "Upload unavailable"),
+                    Component.literal("\u00a78" + sourceLine),
                     Component.literal("\u00a78Shortcut: Ctrl+U")
             ), mouseX, mouseY);
         }
@@ -1013,69 +1039,113 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
         renderTargetPanel(graphics, barY, mouseX, mouseY);
     }
 
-    /**
-     * Bottom-right target panel.
-     *
-     * Shows the item that will receive the schematic, floating gently so it reads
-     * as live, and states plainly whether a target is resolved. Hovering lists
-     * every target Schematicraft can use and its current status, which is the
-     * answer to "what does this work with."
-     */
+    /** Render the independent download destination and upload source. */
     private void renderTargetPanel(GuiGraphics graphics, int barY, int mouseX, int mouseY) {
         int panelX = this.width - TARGET_INFO_MARGIN;
         boolean available = targetDevice.isAvailable();
+        UploadSource source = journey.uploadSource();
+        boolean sourceReady = source != null && source.isReady();
 
-        graphics.drawString(this.font, "Target:", panelX, barY + 6,
-                GuiColors.TEXT_DIM, false);
-
-        if (available) {
-            int tColor = targetDevice.getMode() == TargetDevice.Mode.SERVER
-                    ? GuiColors.TARGET_SERVER : GuiColors.TARGET_CLIENT;
-            graphics.drawString(this.font, targetDevice.getDisplayName(),
-                    panelX, barY + 18, tColor, false);
-            graphics.drawString(this.font, "\u00a78" + targetDevice.getModeLabel(),
-                    panelX, barY + 30, GuiColors.TEXT_DIM, false);
-        } else {
-            graphics.drawString(this.font, "None", panelX, barY + 18,
-                    GuiColors.TARGET_NONE, false);
-            graphics.drawString(this.font, "\u00a78Hold a gadget or open a table",
-                    panelX, barY + 30, GuiColors.TEXT_DIM, false);
-        }
-
-        // Icon slot, right of the text.
-        int slotX = this.width - TARGET_ICON_SIZE - GRID_PADDING;
-        int slotY = barY + 20;
         TargetCatalog.Entry entry = available
                 ? TargetCatalog.get(targetDevice.getType()) : null;
-        ItemStack icon = entry != null ? entry.icon() : ItemStack.EMPTY;
+        boolean hasReceiver = entry != null && entry.hasReceiver();
+        ItemStack receiverStack = hasReceiver ? entry.receiverStack() : ItemStack.EMPTY;
+        boolean receiverReady = !receiverStack.isEmpty();
 
-        if (!icon.isEmpty()) {
-            // Slow bob. Items are flat sprites, so vertical motion reads as
-            // "active" where a spin would just make them vanish edge-on.
-            float phase = (System.currentTimeMillis() % 2000L) / 2000f;
-            int bob = (int) Math.round(Math.sin(phase * Math.PI * 2) * 2.0);
+        int iconsWidth = hasReceiver
+                ? TARGET_ICON_SIZE * 2 + TARGET_SLOT_GAP
+                : TARGET_ICON_SIZE;
+        int textWidth = TARGET_INFO_MARGIN - GRID_PADDING - iconsWidth - 4;
+        int receiverX = this.width - TARGET_ICON_SIZE - GRID_PADDING;
+        int deviceX = hasReceiver
+                ? receiverX - TARGET_ICON_SIZE - TARGET_SLOT_GAP
+                : receiverX;
+        float phase = (System.currentTimeMillis() % 2000L) / 2000f;
 
-            // Soft halo behind the icon so it reads as connected, not decorative.
-            graphics.fill(slotX - 2, slotY - 2 + bob,
-                    slotX + TARGET_ICON_SIZE + 2, slotY + TARGET_ICON_SIZE + 2 + bob,
-                    0x2055FF55);
-            graphics.renderItem(icon, slotX, slotY + bob);
+        graphics.drawString(this.font, "Download to:", panelX, barY + 4,
+                GuiColors.TEXT_DIM, false);
+        if (available) {
+            int color = targetDevice.getMode() == TargetDevice.Mode.SERVER
+                    ? GuiColors.TARGET_SERVER : GuiColors.TARGET_CLIENT;
+            graphics.drawString(this.font,
+                    truncateToWidth(targetDevice.getDisplayName(), textWidth),
+                    panelX, barY + 16, color, false);
+            String detail = hasReceiver
+                    ? (receiverReady ? "into " + receiverStack.getHoverName().getString()
+                    : entry.receiver().emptyHint())
+                    : targetDevice.getModeLabel();
+            graphics.drawString(this.font, "\u00a78" + truncateToWidth(detail, textWidth),
+                    panelX, barY + 28,
+                    hasReceiver && !receiverReady ? GuiColors.WARNING : GuiColors.TEXT_DIM,
+                    false);
         } else {
-            // No target: an empty slot outline, so the space does not look broken.
-            graphics.fill(slotX, slotY, slotX + TARGET_ICON_SIZE,
-                    slotY + TARGET_ICON_SIZE, 0x30FFFFFF);
-            drawBorder(graphics, slotX, slotY, TARGET_ICON_SIZE, TARGET_ICON_SIZE,
-                    GuiColors.BORDER_DARK);
-            graphics.drawCenteredString(this.font, "?",
-                    slotX + TARGET_ICON_SIZE / 2, slotY + 4, GuiColors.TEXT_DIM);
+            graphics.drawString(this.font, "None", panelX, barY + 16,
+                    GuiColors.TARGET_NONE, false);
+            graphics.drawString(this.font, "\u00a78Browse only", panelX, barY + 28,
+                    GuiColors.TEXT_DIM, false);
         }
 
-        // Hovering the panel or the icon explains compatibility.
-        boolean hoverPanel = isOver(mouseX, mouseY, panelX, barY + 4,
-                TARGET_INFO_MARGIN, BOTTOM_BAR_H - 8);
-        if (hoverPanel) {
+        int targetY = barY + 18;
+        ItemStack targetIcon = entry != null ? entry.icon() : ItemStack.EMPTY;
+        if (!targetIcon.isEmpty()) {
+            drawTargetIcon(graphics, targetIcon, deviceX, targetY, phase, 0x2055FF55);
+        } else {
+            drawEmptyTargetSlot(graphics, deviceX, targetY, "?");
+        }
+        if (hasReceiver) {
+            int lineY = targetY + TARGET_ICON_SIZE / 2;
+            graphics.fill(deviceX + TARGET_ICON_SIZE + 1, lineY,
+                    receiverX - 1, lineY + 1,
+                    receiverReady ? GuiColors.SUCCESS : GuiColors.BORDER_DARK);
+            if (receiverReady) {
+                drawTargetIcon(graphics, receiverStack, receiverX, targetY,
+                        phase - 0.12f, 0x2055FF55);
+            } else {
+                drawEmptyTargetSlot(graphics, receiverX, targetY, "+");
+            }
+        }
+
+        graphics.drawString(this.font, "Upload from:", panelX, barY + 44,
+                GuiColors.TEXT_DIM, false);
+        String sourceName = source != null ? source.displayName() : "None";
+        int sourceColor = sourceReady ? GuiColors.SUCCESS
+                : (source != null ? GuiColors.WARNING : GuiColors.TARGET_NONE);
+        graphics.drawString(this.font, truncateToWidth(sourceName, textWidth),
+                panelX, barY + 56, sourceColor, false);
+
+        ItemStack sourceIcon = source != null ? source.icon() : ItemStack.EMPTY;
+        int sourceY = barY + 50;
+        if (!sourceIcon.isEmpty()) {
+            drawTargetIcon(graphics, sourceIcon, receiverX, sourceY,
+                    phase - 0.2f, sourceReady ? 0x2055FF55 : 0x20FFAA33);
+        } else {
+            drawEmptyTargetSlot(graphics, receiverX, sourceY,
+                    source != null ? "!" : "-");
+        }
+
+        if (isOver(mouseX, mouseY, panelX, barY + 2,
+                TARGET_INFO_MARGIN, BOTTOM_BAR_H - 4)) {
             scheduleTooltip(buildCompatibilityTooltip(), mouseX, mouseY);
         }
+    }
+
+    /** One live target icon, floating gently, with a soft halo behind it. */
+    private void drawTargetIcon(GuiGraphics graphics, ItemStack stack,
+                                int x, int y, float phase, int haloColor) {
+        int bob = (int) Math.round(Math.sin(phase * Math.PI * 2) * 2.0);
+        graphics.fill(x - 2, y - 2 + bob,
+                x + TARGET_ICON_SIZE + 2, y + TARGET_ICON_SIZE + 2 + bob,
+                haloColor);
+        graphics.renderItem(stack, x, y + bob);
+    }
+
+    /** An outlined slot, so a missing piece looks deliberate rather than broken. */
+    private void drawEmptyTargetSlot(GuiGraphics graphics, int x, int y, String glyph) {
+        graphics.fill(x, y, x + TARGET_ICON_SIZE, y + TARGET_ICON_SIZE, 0x30FFFFFF);
+        drawBorder(graphics, x, y, TARGET_ICON_SIZE, TARGET_ICON_SIZE,
+                GuiColors.BORDER_DARK);
+        graphics.drawCenteredString(this.font, glyph,
+                x + TARGET_ICON_SIZE / 2, y + 4, GuiColors.TEXT_DIM);
     }
 
     /**
@@ -1093,10 +1163,18 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
 
         for (TargetCatalog.Entry entry : TargetCatalog.all()) {
             boolean isCurrent = targetDevice.isAvailable()
-                    && targetDevice.getType() == entry.type();
+                    && targetDevice.getType().equals(entry.type());
             if (isCurrent) {
                 lines.add(Component.literal("\u00a7a\u25b6 " + entry.label()
                         + " \u00a78(active)"));
+                if (entry.hasReceiver()) {
+                    ItemStack stack = entry.receiverStack();
+                    lines.add(stack.isEmpty()
+                            ? Component.literal("\u00a7e    " + entry.receiver().label()
+                                    + " slot: " + entry.receiver().emptyHint())
+                            : Component.literal("\u00a77    " + entry.receiver().label()
+                                    + " slot: " + stack.getHoverName().getString()));
+                }
             } else if (entry.isInstalled()) {
                 lines.add(Component.literal("\u00a7f\u2022 " + entry.label()));
                 lines.add(Component.literal("\u00a78    " + entry.howToUse()));
@@ -1104,6 +1182,18 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
                 lines.add(Component.literal("\u00a78\u2022 " + entry.label()
                         + " (not installed)"));
             }
+        }
+
+        UploadSource source = journey.uploadSource();
+        lines.add(Component.literal(""));
+        lines.add(Component.literal("Uploads from"));
+        if (source == null) {
+            lines.add(Component.literal("\u00a78No source in this context"));
+        } else if (source.isReady()) {
+            lines.add(Component.literal("\u00a7a\u25b6 " + source.displayName()));
+        } else {
+            lines.add(Component.literal("\u00a7e" + source.displayName()));
+            lines.add(Component.literal("\u00a78    " + source.emptyHint()));
         }
         return lines;
     }
@@ -1505,27 +1595,35 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
                     com.schematicraft.lib.core.SchematicDataCache.get()
                             .put(selected.id(), data);
 
-                    LoadResult loadResult = dispatchLoad(data);
+                    String title = selected.title() != null
+                            ? selected.title() : "schematic";
+                    LoadResult loadResult = dispatchLoad(data, title);
                     if (loadResult.success()) {
-                        String title = selected.title() != null
-                                ? selected.title() : "schematic";
+                        // Name the destination. Targets differ in where a load
+                        // lands, and "Loaded" alone left users checking the wrong
+                        // slot for the result.
+                        String into = loadResult.confirmed()
+                                ? "Loaded into " + targetDevice.getLoadedLabel() + ": " + title
+                                : "Sent to " + targetDevice.getLoadedLabel() + ": " + title;
                         if (loadResult.hasDroppedBlocks()) {
-                            setStatus("Loaded: " + title + " (" + loadResult.droppedBlockTypes().size()
+                            setStatus(into + " (" + loadResult.droppedBlockTypes().size()
                                     + " unknown block types dropped)", GuiColors.WARNING, 5000);
                             LOGGER.warn("Dropped block types: {}", loadResult.droppedBlockTypes());
                         } else if (selected.hasBlockCount()
                                 && limits.exceedsSoft(selected.blockCount())) {
                             // Loaded, but past what this editor was built for.
                             // Say so rather than implying everything is routine.
-                            setStatus("Loaded: " + title + " ("
+                            setStatus(into + " ("
                                             + formatCount(selected.blockCount())
                                             + " blocks, may be slow to paste)",
                                     GuiColors.WARNING, 5000);
                         } else {
-                            setStatus("Loaded: " + title, GuiColors.SUCCESS, 3000);
+                            setStatus(into, GuiColors.SUCCESS, 3000);
                         }
-                        SchematiCraftAPIWrapper.get()
-                                .submitSuccessFeedback(result.downloadId);
+                        if (loadResult.confirmed()) {
+                            SchematiCraftAPIWrapper.get()
+                                    .submitSuccessFeedback(result.downloadId);
+                        }
                         this.onClose();
                     } else {
                         // Stay on the screen so the user can read why and pick
@@ -1559,10 +1657,10 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
      * Dispatch downloaded schematic data to the resolved target device.
      * Editor mods register a handler per target via setLoadHandler().
      */
-    private LoadResult dispatchLoad(byte[] data) {
+    private LoadResult dispatchLoad(byte[] data, String schematicName) {
         LoadHandler handler = getLoadHandler(targetDevice);
         if (handler != null) {
-            return handler.load(targetDevice, data);
+            return handler.load(targetDevice, data, schematicName);
         }
         LOGGER.warn("No load handler registered for target {}", targetDevice.getType());
         return LoadResult.failure();
@@ -1571,33 +1669,48 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
     /**
      * Result from a load operation.
      *
-     * {@code reason} carries a short user-facing explanation on failure, so the
-     * screen can say why instead of showing a generic error. Editors should
-     * always supply one.
+     * {@code confirmed} is true only when the editor handoff completed locally.
+     * Packet-based integrations without an acknowledgment use dispatched results,
+     * which may close back to the native editor but do not submit positive
+     * feedback. {@code reason} is a short user-facing failure explanation.
      */
-    public record LoadResult(boolean success, int blocksLoaded,
+    public record LoadResult(boolean success, boolean confirmed, int blocksLoaded,
                              List<String> droppedBlockTypes, @Nullable String reason) {
         public static LoadResult success(int blocksLoaded) {
-            return new LoadResult(true, blocksLoaded, List.of(), null);
+            return new LoadResult(true, true, blocksLoaded, List.of(), null);
         }
         public static LoadResult partial(int blocksLoaded, List<String> droppedBlockTypes) {
-            return new LoadResult(true, blocksLoaded, droppedBlockTypes, null);
+            return new LoadResult(true, true, blocksLoaded, droppedBlockTypes, null);
+        }
+        public static LoadResult dispatched(int blocksLoaded) {
+            return new LoadResult(true, false, blocksLoaded, List.of(), null);
+        }
+        public static LoadResult dispatchedPartial(
+                int blocksLoaded, List<String> droppedBlockTypes) {
+            return new LoadResult(true, false, blocksLoaded, droppedBlockTypes, null);
         }
         public static LoadResult failure(String reason) {
-            return new LoadResult(false, 0, List.of(), reason);
+            return new LoadResult(false, false, 0, List.of(), reason);
         }
         public static LoadResult failure() {
-            return new LoadResult(false, 0, List.of(), null);
+            return new LoadResult(false, false, 0, List.of(), null);
         }
         public boolean hasDroppedBlocks() {
             return !droppedBlockTypes.isEmpty();
         }
     }
 
-    /** Functional interface for editor-specific load dispatch. */
+    /**
+     * Functional interface for editor-specific load dispatch.
+     *
+     * @param schematicName the schematic's title, for editors that name what they
+     *                      store. File-based editors like Create need this: without
+     *                      it every download lands under the same generic filename
+     *                      and the user cannot tell their schematics apart.
+     */
     @FunctionalInterface
     public interface LoadHandler {
-        LoadResult load(TargetDevice target, byte[] schematicData);
+        LoadResult load(TargetDevice target, byte[] schematicData, String schematicName);
     }
 
     /**
@@ -1608,7 +1721,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
      * mean the last registration silently wins.
      */
     private static final java.util.Map<TargetDevice.Type, LoadHandler> loadHandlers =
-            new java.util.EnumMap<>(TargetDevice.Type.class);
+            new java.util.HashMap<>();
 
     /** Register the load handler for a target. Called once during client setup. */
     public static void setLoadHandler(TargetDevice.Type type, LoadHandler handler) {
@@ -1617,7 +1730,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
 
     /** Block-count limits per target, declared by each editor integration. */
     private static final java.util.Map<TargetDevice.Type, LoadLimits> loadLimits =
-            new java.util.EnumMap<>(TargetDevice.Type.class);
+            new java.util.HashMap<>();
 
     /** Register block-count limits for a target. Called once during client setup. */
     public static void setLoadLimits(TargetDevice.Type type, LoadLimits limits) {
@@ -1673,35 +1786,31 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
         pendingCameraImages = new ArrayList<>();
         pendingCameraSchematicId = selected.id();
         pendingCameraSchematicTitle = selected.title();
+        pendingCameraJourney = journey;
 
         this.minecraft.setScreen(null);
         CameraMode.start(pendingCameraImages, () -> {
             Minecraft.getInstance().execute(() -> {
-                Minecraft.getInstance().setScreen(new LibraryScreen());
+                EditorJourney reopen = pendingCameraJourney != null
+                        ? pendingCameraJourney : EditorJourney.browse();
+                pendingCameraJourney = null;
+                Minecraft.getInstance().setScreen(new LibraryScreen(reopen));
             });
         });
     }
 
     private void openUploadScreen() {
-        if (uploadSource == null) {
-            setStatus("Uploading is not available for this editor",
+        UploadSource source = journey.uploadSource();
+        if (source == null) {
+            setStatus("No upload source in this editor context",
                     GuiColors.WARNING, 3000);
             return;
         }
-        Minecraft.getInstance().setScreen(new UploadScreen(uploadSource));
-    }
-
-    /** Editor-specific upload source. Registered once during mod init. */
-    private static UploadSource uploadSource = null;
-
-    /** Register the editor's upload source. Called once during client setup. */
-    public static void setUploadSource(UploadSource source) {
-        uploadSource = source;
-    }
-
-    @Nullable
-    public static UploadSource getUploadSource() {
-        return uploadSource;
+        if (!source.isReady()) {
+            setStatus(source.emptyHint(), GuiColors.WARNING, 4000);
+            return;
+        }
+        Minecraft.getInstance().setScreen(new UploadScreen(source, journey));
     }
 
     private void openPaletteScreen() {
@@ -1710,7 +1819,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
             setStatus("Select a schematic first", GuiColors.WARNING, 2000);
             return;
         }
-        Minecraft.getInstance().setScreen(new PaletteScreen(selected, targetDevice));
+        Minecraft.getInstance().setScreen(new PaletteScreen(selected, journey));
     }
 
     // --------------------------------------------------
@@ -1733,7 +1842,8 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
         // "+" first: its bounds come from the last render, so it always matches.
         if (plusTabX >= 0 && isOver((int) mouseX, (int) mouseY,
                 plusTabX, TAB_Y_OFFSET, plusTabW, TAB_H)) {
-            Minecraft.getInstance().setScreen(new NewBundleScreen(new LibraryScreen(), null));
+            Minecraft.getInstance().setScreen(
+                    new NewBundleScreen(new LibraryScreen(journey), null));
             return;
         }
 

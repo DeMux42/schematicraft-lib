@@ -31,6 +31,7 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
     private static final int ROW_H = 22;
 
     private final UploadSource source;
+    private final EditorJourney journey;
     private final List<UploadSource.Candidate> candidates;
 
     private int candidateIndex = 0;
@@ -63,9 +64,10 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
     private static int pendingCandidateIndex = 0;
     private static int pendingBundleIndex = 0;
 
-    public UploadScreen(UploadSource source) {
+    public UploadScreen(UploadSource source, EditorJourney journey) {
         super(Component.literal("Upload Build"));
         this.source = source;
+        this.journey = journey;
         this.candidates = new ArrayList<>(source.listCandidates());
     }
 
@@ -145,7 +147,7 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
         this.addRenderableWidget(saveButton);
 
         this.addRenderableWidget(Button.builder(Component.literal("Cancel"),
-                b -> Minecraft.getInstance().setScreen(new LibraryScreen()))
+                b -> Minecraft.getInstance().setScreen(new LibraryScreen(journey)))
                 .bounds(x + FIELD_W / 2 + 2, y, FIELD_W / 2 - 2, 20).build());
 
         if (candidates.isEmpty()) {
@@ -183,7 +185,7 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
         this.minecraft.setScreen(null);
         CameraMode.start(pendingImages, () ->
                 Minecraft.getInstance().execute(() ->
-                        Minecraft.getInstance().setScreen(new UploadScreen(source))));
+                        Minecraft.getInstance().setScreen(new UploadScreen(source, journey))));
     }
 
     private void doUpload() {
@@ -226,7 +228,7 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
                     clearPendingState();
 
                     SchematiCraftAPIWrapper.get().refreshLibrary();
-                    Minecraft.getInstance().setScreen(new LibraryScreen());
+                    Minecraft.getInstance().setScreen(new LibraryScreen(journey));
                 }))
                 .exceptionally(ex -> {
                     Minecraft.getInstance().execute(() -> {
@@ -246,7 +248,7 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
 
         graphics.fill(0, 0, this.width, 30, GuiColors.PANEL_BG);
         graphics.fill(0, 29, this.width, 30, GuiColors.BORDER_SEPARATOR);
-        graphics.drawString(this.font, "Upload build to your library", 8, 6,
+        graphics.drawString(this.font, "Upload from " + source.displayName(), 8, 6,
                 GuiColors.SELECTED, false);
         graphics.drawString(this.font, "Shared publicly only if you choose to on the website",
                 8, 18, GuiColors.TEXT_DIM, false);
@@ -416,7 +418,7 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
         pendingCandidateIndex = candidateIndex;
         pendingBundleIndex = bundleIndex;
 
-        Minecraft.getInstance().setScreen(new NewBundleScreen(new UploadScreen(source), id -> {
+        Minecraft.getInstance().setScreen(new NewBundleScreen(new UploadScreen(source, journey), id -> {
             // Select the freshly created bundle by id once the library refreshes.
             List<LibraryState.BundleOption> opts = LibraryState.get().getBundleOptions();
             for (int i = 0; i < opts.size(); i++) {
@@ -436,7 +438,7 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
         if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
-            Minecraft.getInstance().setScreen(new LibraryScreen());
+            Minecraft.getInstance().setScreen(new LibraryScreen(journey));
             return true;
         }
         // Enter in the title field submits

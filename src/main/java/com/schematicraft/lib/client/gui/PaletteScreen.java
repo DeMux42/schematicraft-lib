@@ -38,6 +38,7 @@ public class PaletteScreen extends Screen implements SchematicraftScreen {
 
     // State
     private final SchematicEntry schematic;
+    private final EditorJourney journey;
     private final TargetDevice targetDevice;
     private List<PaletteEntry> palettes = new ArrayList<>();
     private int selectedIndex = -1;
@@ -58,10 +59,11 @@ public class PaletteScreen extends Screen implements SchematicraftScreen {
     private Button applyButton;
     private Button backButton;
 
-    public PaletteScreen(SchematicEntry schematic, TargetDevice targetDevice) {
+    public PaletteScreen(SchematicEntry schematic, EditorJourney journey) {
         super(Component.literal("Palettes"));
         this.schematic = schematic;
-        this.targetDevice = targetDevice;
+        this.journey = journey;
+        this.targetDevice = journey.target();
     }
 
     @Override
@@ -78,7 +80,7 @@ public class PaletteScreen extends Screen implements SchematicraftScreen {
         int centerX = this.width / 2;
 
         backButton = Button.builder(Component.literal("Back"),
-                b -> Minecraft.getInstance().setScreen(new LibraryScreen()))
+                b -> Minecraft.getInstance().setScreen(new LibraryScreen(journey)))
                 .bounds(centerX - 130, btnY, 60, 20).build();
         this.addRenderableWidget(backButton);
 
@@ -265,7 +267,7 @@ public class PaletteScreen extends Screen implements SchematicraftScreen {
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
         if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
-            Minecraft.getInstance().setScreen(new LibraryScreen());
+            Minecraft.getInstance().setScreen(new LibraryScreen(journey));
             return true;
         }
         if (keyCode == GLFW.GLFW_KEY_ENTER && selectedIndex >= 0) {
@@ -308,10 +310,15 @@ public class PaletteScreen extends Screen implements SchematicraftScreen {
                                 + targetDevice.getDisplayName());
                         return;
                     }
-                    var loadResult = handler.load(targetDevice, data);
+                    String name = schematic.title() != null
+                            ? schematic.title() : "schematic";
+                    var loadResult = handler.load(targetDevice, data, name);
                     if (loadResult.success()) {
-                        SchematiCraftAPIWrapper.get().submitSuccessFeedback(result.downloadId);
-                        Minecraft.getInstance().setScreen(null);
+                        if (loadResult.confirmed()) {
+                            SchematiCraftAPIWrapper.get()
+                                    .submitSuccessFeedback(result.downloadId);
+                        }
+                        journey.returnToOrigin();
                     } else {
                         failLoad(loadResult.reason() != null
                                 ? loadResult.reason()

@@ -7,6 +7,9 @@ import com.schematicraft.lib.core.LibraryState;
 import com.mojang.logging.LogUtils;
 import org.slf4j.Logger;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -40,6 +43,22 @@ public class SchematiCraftAPIWrapper {
     }
 
     public ExecutorService getExecutor() { return executor; }
+
+    /** Upload an editor-native file without teaching the shared UI its format. */
+    public CompletableFuture<Boolean> uploadFile(
+            Path file, String title, String description, String minecraftVersion,
+            String loader, String bundleId, List<Path> images) {
+        return runAsync(() -> {
+            if (file == null || !Files.isRegularFile(file)) {
+                throw new IllegalStateException("Upload file is no longer available");
+            }
+            String response = createClient().upload(
+                    file, title, description, minecraftVersion, loader, null,
+                    false, bundleId, images);
+            LibraryState.get().invalidateLibrary();
+            return response != null && response.contains("\"isDuplicate\":true");
+        });
+    }
 
     public CompletableFuture<String> getStatus() {
         return runAsync(() -> createClient().getStatus());
@@ -120,18 +139,24 @@ public class SchematiCraftAPIWrapper {
         return java.net.URLEncoder.encode(value, java.nio.charset.StandardCharsets.UTF_8);
     }
 
-    public CompletableFuture<SchematiCraftAPI.DownloadResult> downloadSchematic(String schematicId) {
-        return downloadSchematic(schematicId, "json", "BuildingGadgets");
+    private static void requireDownloadTarget(String format, String targetEditor) {
+        if (format == null || format.isBlank()
+                || targetEditor == null || targetEditor.isBlank()) {
+            throw new IllegalArgumentException(
+                    "Download target must declare a format and editor");
+        }
     }
 
     public CompletableFuture<SchematiCraftAPI.DownloadResult> downloadSchematic(
             String schematicId, String format, String targetEditor) {
         return CompletableFuture.supplyAsync(() -> {
             try {
+                requireDownloadTarget(format, targetEditor);
                 long t0 = System.currentTimeMillis();
-                String ext = format != null ? format : "json";
-                java.nio.file.Path tempFile = java.nio.file.Files.createTempFile("schematicraft_dl_", "." + ext);
-                var result = createClient().download(schematicId, tempFile, format, targetEditor, null, null);
+                java.nio.file.Path tempFile = java.nio.file.Files.createTempFile(
+                        "schematicraft_dl_", "." + format);
+                var result = createClient().download(
+                        schematicId, tempFile, format, targetEditor, null, null);
                 long size = java.nio.file.Files.size(tempFile);
                 LOGGER.info("[perf] download HTTP: {}ms, file: {} bytes, format: {}",
                         System.currentTimeMillis() - t0, size, format);
@@ -223,12 +248,12 @@ public class SchematiCraftAPIWrapper {
             String schematicId, String paletteId, String format, String targetEditor) {
         return CompletableFuture.supplyAsync(() -> {
             try {
+                requireDownloadTarget(format, targetEditor);
                 long t0 = System.currentTimeMillis();
-                String ext = format != null ? format : "json";
-                String editor = targetEditor != null ? targetEditor : "BuildingGadgets";
                 String url = ModConfig.getServerUrl() + "/api/ingame/v1/schematics/" + schematicId
-                        + "/download?format=" + ext + "&targetEditor=" + editor
-                        + "&paletteId=" + paletteId + "&force=true";
+                        + "/download?format=" + urlEncode(format)
+                        + "&targetEditor=" + urlEncode(targetEditor)
+                        + "&paletteId=" + urlEncode(paletteId) + "&force=true";
 
                 java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder()
                         .uri(java.net.URI.create(url))
@@ -236,7 +261,8 @@ public class SchematiCraftAPIWrapper {
                         .header("X-Schematicraft-Client", clientIdentifier)
                         .GET().build();
 
-                java.nio.file.Path tempFile = java.nio.file.Files.createTempFile("schematicraft_pal_", "." + ext);
+                java.nio.file.Path tempFile = java.nio.file.Files.createTempFile(
+                        "schematicraft_pal_", "." + format);
                 java.net.http.HttpResponse<java.nio.file.Path> response = java.net.http.HttpClient.newBuilder()
                         .version(java.net.http.HttpClient.Version.HTTP_1_1).build()
                         .send(request, java.net.http.HttpResponse.BodyHandlers.ofFile(tempFile));

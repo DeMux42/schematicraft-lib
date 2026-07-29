@@ -5,37 +5,63 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 
+import javax.annotation.Nullable;
 import java.util.ArrayList;
-import java.util.EnumMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.function.Supplier;
 
 /**
- * What Schematicraft can load into, and how to show it.
+ * Editor-registered metadata for download destinations.
  *
- * Editor integrations register an entry per target they support. The library
- * screen renders the current target and the full compatibility list from this,
- * so it never needs to know which editors exist. Adding Litematica or Axiom
- * later is one registration each.
- *
- * Items are looked up by registry id rather than by class so the shared library
- * keeps no compile-time dependency on any editor, and a missing mod simply
- * yields an empty icon instead of failing.
+ * The shared screen renders and dispatches by opaque target id. Adding an editor
+ * only requires a catalog entry, load handler, limits, and optional resolver.
  */
 public final class TargetCatalog {
+    public record Receiver(Supplier<ItemStack> stack, String label,
+                           String emptyHint) {}
 
-    /**
-     * A loadable target.
-     *
-     * @param type      which target this describes
-     * @param label     short human name, e.g. "Copy/Paste Gadget"
-     * @param itemId    registry id of the item to render, e.g.
-     *                  "buildinggadgets2:gadget_copy_paste"
-     * @param howToUse  one line telling the user how to reach this target
-     */
-    public record Entry(TargetDevice.Type type, String label, String itemId, String howToUse) {
+    public record Entry(
+            TargetDevice.Type type,
+            String label,
+            String itemId,
+            String howToUse,
+            String loadButtonText,
+            String destinationHint,
+            String loadedLabel,
+            String downloadFormat,
+            String downloadEditor,
+            @Nullable Receiver receiver) {
 
-        /** The icon for this target, or an empty stack when the mod is absent. */
+        public Entry {
+            Objects.requireNonNull(type, "type");
+            requireText(label, "label");
+            requireText(itemId, "itemId");
+            requireText(howToUse, "howToUse");
+            requireText(loadButtonText, "loadButtonText");
+            requireText(destinationHint, "destinationHint");
+            requireText(loadedLabel, "loadedLabel");
+            requireText(downloadFormat, "downloadFormat");
+            requireText(downloadEditor, "downloadEditor");
+        }
+
+        private static void requireText(String value, String name) {
+            if (value == null || value.isBlank()) {
+                throw new IllegalArgumentException(name + " is required");
+            }
+        }
+
+        public Entry(TargetDevice.Type type, String label, String itemId,
+                     String howToUse, String loadButtonText,
+                     String destinationHint, String loadedLabel,
+                     String downloadFormat, String downloadEditor) {
+            this(type, label, itemId, howToUse, loadButtonText,
+                    destinationHint, loadedLabel, downloadFormat,
+                    downloadEditor, null);
+        }
+
         public ItemStack icon() {
             ResourceLocation id = ResourceLocation.tryParse(itemId);
             if (id == null) return ItemStack.EMPTY;
@@ -43,36 +69,37 @@ public final class TargetCatalog {
             return item == null ? ItemStack.EMPTY : new ItemStack(item);
         }
 
-        /**
-         * True when the item exists in this game instance, which means the
-         * providing mod is installed.
-         */
-        public boolean isInstalled() {
-            return !icon().isEmpty();
+        public boolean isInstalled() { return !icon().isEmpty(); }
+        public boolean hasReceiver() { return receiver != null; }
+
+        public ItemStack receiverStack() {
+            if (receiver == null) return ItemStack.EMPTY;
+            try {
+                ItemStack stack = receiver.stack().get();
+                return stack == null ? ItemStack.EMPTY : stack;
+            } catch (RuntimeException ignored) {
+                return ItemStack.EMPTY;
+            }
         }
     }
 
-    private static final Map<TargetDevice.Type, Entry> entries =
-            new EnumMap<>(TargetDevice.Type.class);
+    private static final Map<TargetDevice.Type, Entry> ENTRIES =
+            new LinkedHashMap<>();
 
     private TargetCatalog() {}
 
-    /** Register a target. Called once per target during client setup. */
     public static void register(Entry entry) {
-        entries.put(entry.type(), entry);
+        ENTRIES.put(entry.type(), entry);
     }
 
-    /** The entry for a target type, or null when nothing registered it. */
+    @Nullable
     public static Entry get(TargetDevice.Type type) {
-        return entries.get(type);
+        return ENTRIES.get(type);
     }
 
-    /** All registered targets, in registration order of the enum. */
     public static List<Entry> all() {
-        return new ArrayList<>(entries.values());
+        return new ArrayList<>(ENTRIES.values());
     }
 
-    public static boolean isEmpty() {
-        return entries.isEmpty();
-    }
+    public static boolean isEmpty() { return ENTRIES.isEmpty(); }
 }
