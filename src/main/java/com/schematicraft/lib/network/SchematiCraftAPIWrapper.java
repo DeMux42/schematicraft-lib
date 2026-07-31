@@ -25,6 +25,22 @@ public class SchematiCraftAPIWrapper {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int MAX_FEEDBACK_LENGTH = 1000;
 
+    private static final java.time.Duration CONNECT_TIMEOUT = java.time.Duration.ofSeconds(10);
+    private static final java.time.Duration REQUEST_TIMEOUT = java.time.Duration.ofSeconds(30);
+    private static final java.time.Duration DOWNLOAD_TIMEOUT = java.time.Duration.ofMinutes(2);
+
+    /**
+     * Single client for the hand-written calls in this class.
+     *
+     * <p>Without a connect timeout, a server that accepts a connection and then
+     * stalls holds an API worker thread indefinitely and the UI waits forever.
+     * Per-request deadlines are set at each call site.
+     */
+    private static final java.net.http.HttpClient HTTP_CLIENT = java.net.http.HttpClient.newBuilder()
+            .version(java.net.http.HttpClient.Version.HTTP_1_1)
+            .connectTimeout(CONNECT_TIMEOUT)
+            .build();
+
     private final ExecutorService executor = Executors.newFixedThreadPool(3, r -> {
         Thread t = new Thread(r, "Schematicraft-API");
         t.setDaemon(true);
@@ -90,6 +106,8 @@ public class SchematiCraftAPIWrapper {
                     && (apiEx.statusCode == 401 || apiEx.statusCode == 403)) {
                 LOGGER.warn("API key rejected (HTTP {}), clearing key", apiEx.statusCode);
                 ModConfig.setApiKey("");
+                // Drop user-derived thumbnails so they do not outlive the credential.
+                com.schematicraft.lib.client.ThumbnailCache.get().clear();
             }
 
             state.setLibraryError(rootMessage(ex));
@@ -257,18 +275,25 @@ public class SchematiCraftAPIWrapper {
 
                 java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder()
                         .uri(java.net.URI.create(url))
+                        .timeout(DOWNLOAD_TIMEOUT)
                         .header("Authorization", "Bearer " + ModConfig.getApiKey())
                         .header("X-Schematicraft-Client", clientIdentifier)
                         .GET().build();
 
                 java.nio.file.Path tempFile = java.nio.file.Files.createTempFile(
                         "schematicraft_pal_", "." + format);
-                java.net.http.HttpResponse<java.nio.file.Path> response = java.net.http.HttpClient.newBuilder()
-                        .version(java.net.http.HttpClient.Version.HTTP_1_1).build()
-                        .send(request, java.net.http.HttpResponse.BodyHandlers.ofFile(tempFile));
+                final java.net.http.HttpResponse<java.nio.file.Path> response;
+                try {
+                    response = HTTP_CLIENT.send(
+                            request, java.net.http.HttpResponse.BodyHandlers.ofFile(tempFile));
+                } catch (Exception sendFailure) {
+                    // Do not leave a partial download behind on timeout or error.
+                    java.nio.file.Files.deleteIfExists(tempFile);
+                    throw sendFailure;
+                }
 
                 if (response.statusCode() >= 400) {
-                    String body = java.nio.file.Files.readString(tempFile);
+                    String body = readTruncated(tempFile);
                     java.nio.file.Files.deleteIfExists(tempFile);
                     throw new RuntimeException("HTTP " + response.statusCode() + ": " + body);
                 }
@@ -289,14 +314,14 @@ public class SchematiCraftAPIWrapper {
     private String httpGet(String url) throws Exception {
         var request = java.net.http.HttpRequest.newBuilder()
                 .uri(java.net.URI.create(url))
+                .timeout(REQUEST_TIMEOUT)
                 .header("Authorization", "Bearer " + ModConfig.getApiKey())
                 .header("X-Schematicraft-Client", clientIdentifier)
                 .GET().build();
-        var response = java.net.http.HttpClient.newBuilder()
-                .version(java.net.http.HttpClient.Version.HTTP_1_1).build()
-                .send(request, java.net.http.HttpResponse.BodyHandlers.ofString());
+        var response = HTTP_CLIENT.send(
+                request, java.net.http.HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() >= 400) {
-            throw new RuntimeException("HTTP " + response.statusCode() + ": " + response.body());
+            throw new RuntimeException("HTTP " + response.statusCode() + ": " + truncate(response.body()));
         }
         return response.body();
     }
@@ -304,17 +329,49 @@ public class SchematiCraftAPIWrapper {
     private String httpPost(String url, String jsonBody) throws Exception {
         var request = java.net.http.HttpRequest.newBuilder()
                 .uri(java.net.URI.create(url))
+                .timeout(REQUEST_TIMEOUT)
                 .header("Authorization", "Bearer " + ModConfig.getApiKey())
                 .header("Content-Type", "application/json")
                 .header("X-Schematicraft-Client", clientIdentifier)
                 .POST(java.net.http.HttpRequest.BodyPublishers.ofString(jsonBody)).build();
-        var response = java.net.http.HttpClient.newBuilder()
-                .version(java.net.http.HttpClient.Version.HTTP_1_1).build()
-                .send(request, java.net.http.HttpResponse.BodyHandlers.ofString());
+        var response = HTTP_CLIENT.send(
+                request, java.net.http.HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() >= 400) {
-            throw new RuntimeException("HTTP " + response.statusCode() + ": " + response.body());
+            throw new RuntimeException("HTTP " + response.statusCode() + ": " + truncate(response.body()));
         }
         return response.body();
+    }
+
+    /** Maximum remote error text carried into an exception message. */
+    private static final int MAX_ERROR_CHARS = 500;
+
+    /** Keep a remote error body from flooding logs or exception messages. */
+    private static String truncate(String body) {
+        if (body == null) {
+            return "";
+        }
+        String single = body.replaceAll("\\s+", " ").trim();
+        return single.length() <= MAX_ERROR_CHARS
+                ? single
+                : single.substring(0, MAX_ERROR_CHARS) + "\u2026";
+    }
+
+    /** Read a bounded amount of an error response that was streamed to a file. */
+    private static String readTruncated(java.nio.file.Path file) {
+        try {
+            long size = java.nio.file.Files.size(file);
+            if (size > MAX_ERROR_CHARS * 4L) {
+                byte[] head = new byte[MAX_ERROR_CHARS];
+                try (var in = java.nio.file.Files.newInputStream(file)) {
+                    int read = in.read(head);
+                    return read <= 0 ? "" : truncate(new String(head, 0, read,
+                            java.nio.charset.StandardCharsets.UTF_8));
+                }
+            }
+            return truncate(java.nio.file.Files.readString(file));
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     private static String escapeJson(String s) {

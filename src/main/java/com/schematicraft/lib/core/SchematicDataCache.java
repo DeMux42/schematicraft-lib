@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 
 import javax.annotation.Nullable;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -16,51 +17,108 @@ import java.util.Map;
 /**
  * LRU cache for downloaded schematic data (raw BG2 JSON bytes).
  * Avoids re-downloading the same schematic for palette editing or repeated loads.
- * Keyed by schematic ID. Evicts oldest entries when capacity is exceeded.
+ * Keyed by schematic ID.
  *
- * Also provides block list extraction from cached BG2 JSON data.
+ * <p>Bounded by total bytes rather than entry count. Entry count is not a useful
+ * bound here because a single value can be tens of megabytes, so a small number
+ * of large schematics could otherwise exhaust the heap.
+ *
+ * <p>All access is synchronized on {@link #lock}. Access ordering mutates the map
+ * on read, and this cache is used from API worker threads and the render thread,
+ * so unsynchronized reads could corrupt the structure.
+ *
+ * <p>Also provides block list extraction from cached BG2 JSON data.
  */
 public class SchematicDataCache {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final int MAX_ENTRIES = 10;
+
+    /** Total cached bytes retained before the least recently used entry is dropped. */
+    private static final long MAX_CACHE_BYTES = 96L * 1024 * 1024;
+
+    /** Values at or above this size are not cached at all. */
+    private static final long MAX_ENTRY_BYTES = 48L * 1024 * 1024;
+
     private static final SchematicDataCache INSTANCE = new SchematicDataCache();
 
     public static SchematicDataCache get() { return INSTANCE; }
 
-    private final LinkedHashMap<String, byte[]> cache = new LinkedHashMap<>(16, 0.75f, true) {
-        @Override
-        protected boolean removeEldestEntry(Map.Entry<String, byte[]> eldest) {
-            return size() > MAX_ENTRIES;
-        }
-    };
+    private final Object lock = new Object();
+
+    /** Access-ordered map guarded by {@link #lock}. */
+    private final LinkedHashMap<String, byte[]> cache = new LinkedHashMap<>(16, 0.75f, true);
+
+    private long cachedBytes = 0L;
 
     private SchematicDataCache() {}
 
-    /** Store downloaded schematic data in the cache. */
+    /**
+     * Store downloaded schematic data, evicting least recently used entries to
+     * stay within the byte budget. Values above {@link #MAX_ENTRY_BYTES} are
+     * skipped so one oversized download cannot flush the whole cache.
+     */
     public void put(String schematicId, byte[] data) {
-        cache.put(schematicId, data);
+        if (schematicId == null || data == null) {
+            return;
+        }
+
+        if (data.length > MAX_ENTRY_BYTES) {
+            LOGGER.debug("Not caching schematic {}: {} bytes exceeds the per-entry limit",
+                    schematicId, data.length);
+            return;
+        }
+
+        synchronized (lock) {
+            byte[] previous = cache.put(schematicId, data);
+            if (previous != null) {
+                cachedBytes -= previous.length;
+            }
+            cachedBytes += data.length;
+
+            Iterator<Map.Entry<String, byte[]>> it = cache.entrySet().iterator();
+            while (cachedBytes > MAX_CACHE_BYTES && it.hasNext()) {
+                Map.Entry<String, byte[]> oldest = it.next();
+                if (oldest.getKey().equals(schematicId)) {
+                    continue;
+                }
+                cachedBytes -= oldest.getValue().length;
+                it.remove();
+            }
+        }
+
         LOGGER.debug("Cached schematic {}: {} bytes", schematicId, data.length);
     }
 
     /** Get cached data for a schematic, or null if not cached. */
     @Nullable
     public byte[] get(String schematicId) {
-        return cache.get(schematicId);
+        synchronized (lock) {
+            return cache.get(schematicId);
+        }
     }
 
     /** Check if a schematic is cached. */
     public boolean has(String schematicId) {
-        return cache.containsKey(schematicId);
+        synchronized (lock) {
+            return cache.containsKey(schematicId);
+        }
     }
 
     /** Remove a specific entry (e.g., after palette download replaces it). */
     public void invalidate(String schematicId) {
-        cache.remove(schematicId);
+        synchronized (lock) {
+            byte[] removed = cache.remove(schematicId);
+            if (removed != null) {
+                cachedBytes -= removed.length;
+            }
+        }
     }
 
     /** Clear the entire cache. */
     public void clear() {
-        cache.clear();
+        synchronized (lock) {
+            cache.clear();
+            cachedBytes = 0L;
+        }
     }
 
     /**

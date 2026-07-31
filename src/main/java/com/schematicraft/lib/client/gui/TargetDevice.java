@@ -55,9 +55,18 @@ public final class TargetDevice {
         return TargetCatalog.get(type);
     }
 
+    /**
+     * Display name of the destination.
+     *
+     * <p>Must match the {@code displayName()} of the matching upload source, so
+     * "Download to" and "Upload from" name the same device the same way.
+     *
+     * <p>Falls back to readable text rather than an empty string, because this
+     * value is interpolated into status and error messages.
+     */
     public String getDisplayName() {
         TargetCatalog.Entry entry = entry();
-        return entry != null ? entry.label() : "";
+        return entry != null ? entry.label() : "no target";
     }
 
     public String getLoadButtonText() {

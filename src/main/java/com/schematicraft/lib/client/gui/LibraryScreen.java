@@ -1536,6 +1536,25 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
         });
     }
 
+    /**
+     * Why loading is unavailable, described in terms of what is actually installed.
+     *
+     * The shared library must not name specific editors. With one integration
+     * active its own registered how-to is the most useful thing to say. With none
+     * active, telling the user to hold a gadget or open a table would be advice
+     * they cannot act on.
+     */
+    private static String noTargetMessage() {
+        List<TargetCatalog.Entry> entries = TargetCatalog.all();
+        if (entries.isEmpty()) {
+            return "No editor integrations are active";
+        }
+        if (entries.size() == 1) {
+            return "No target here. " + entries.get(0).howToUse();
+        }
+        return "No target here. Open a supported editor screen or hold a supported item.";
+    }
+
     private void loadSelectedSchematic() {
         SchematicEntry selected = gridState.getSelectedSchematic();
         if (selected == null) {
@@ -1543,8 +1562,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
             return;
         }
         if (!targetDevice.isAvailable()) {
-            setStatus("No target device. Hold a gadget or open a table.",
-                    GuiColors.WARNING, 3000);
+            setStatus(noTargetMessage(), GuiColors.WARNING, 3000);
             return;
         }
 
