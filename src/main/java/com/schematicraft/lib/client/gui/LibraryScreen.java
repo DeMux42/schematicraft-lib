@@ -1165,7 +1165,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
             boolean isCurrent = targetDevice.isAvailable()
                     && targetDevice.getType().equals(entry.type());
             if (isCurrent) {
-                lines.add(Component.literal("\u00a7a\u25b6 " + entry.label()
+                lines.add(Component.literal("\u00a7a\u2022 " + entry.label()
                         + " \u00a78(active)"));
                 if (entry.hasReceiver()) {
                     ItemStack stack = entry.receiverStack();
@@ -1190,7 +1190,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
         if (source == null) {
             lines.add(Component.literal("\u00a78No source in this context"));
         } else if (source.isReady()) {
-            lines.add(Component.literal("\u00a7a\u25b6 " + source.displayName()));
+            lines.add(Component.literal("\u00a7a\u2022 " + source.displayName()));
         } else {
             lines.add(Component.literal("\u00a7e" + source.displayName()));
             lines.add(Component.literal("\u00a78    " + source.emptyHint()));
