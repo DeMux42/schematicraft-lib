@@ -47,11 +47,21 @@ public class SchematiCraftAPIWrapper {
         return t;
     });
 
-    private String clientIdentifier = "schematicraft/0.1.0";
+    /**
+     * Sent as the X-Schematicraft-Client header.
+     *
+     * This library is editor agnostic and has no version of its own to report, so
+     * the consuming mod must call {@link #setClientIdentifier(String)} during setup.
+     * The default deliberately says "unknown" rather than naming a version: a stale
+     * hardcoded number here would silently misreport which build made the request.
+     * The header must stay non-null, so this is not left empty.
+     */
+    private String clientIdentifier = "schematicraft/unknown";
 
     private SchematiCraftAPIWrapper() {}
     public static SchematiCraftAPIWrapper get() { return INSTANCE; }
 
+    /** Called by the consuming mod. Expected format: name/version (platform). */
     public void setClientIdentifier(String id) { this.clientIdentifier = id; }
 
     public SchematiCraftAPI createClient() {
