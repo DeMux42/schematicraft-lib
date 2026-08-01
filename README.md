@@ -63,14 +63,30 @@ These are not style preferences. Breaking them breaks consumers.
 
 ## Getting Started
 
-Clone beside the consuming editor mod:
+There is nothing to build here. This repository has no Gradle build of its own; the editor mod compiles these sources as part of its own source set. Build the editor mod instead.
 
-```sh
-git clone https://github.com/DeMux42/schematicraft-lib.git
-git clone https://github.com/DeMux42/schematicraft-mod.git
+`SchematiCraftAPIWrapper` imports `com.schematicraft.api.SchematiCraftAPI`, so the [API client](https://github.com/DeMux42/schematicraft-api) has to be present as well. The editor mod resolves all three at fixed relative paths, so the layout matters:
+
+```
+workspace/
+  api-clients/              clone of schematicraft-api, folder must be named api-clients
+  mods/
+    schematicraft-lib/      this repository
+    schematicraft-mod/      the editor mod that builds everything
 ```
 
-The editor mod adds `../schematicraft-lib/src/main/java` as a source directory, so there is nothing to build here directly. Build the editor mod instead, and keep both repositories on matching branches, since the source directory link is not version pinned.
+```sh
+mkdir -p workspace/mods
+cd workspace
+git clone https://github.com/DeMux42/schematicraft-api.git api-clients
+cd mods
+git clone https://github.com/DeMux42/schematicraft-lib.git
+git clone https://github.com/DeMux42/schematicraft-mod.git
+cd schematicraft-mod
+./gradlew build
+```
+
+None of the source directory links are version pinned, so keep all three repositories on matching branches.
 
 Longer term this should ship as a versioned Jar-in-Jar artifact rather than a source directory. It is a source directory today because there is one consumer.
 
