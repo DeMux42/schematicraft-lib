@@ -42,24 +42,50 @@ public class ApiJsonParser {
         return new LibraryData(bundles, unbundled);
     }
 
-    public static List<SearchResultEntry> parseSearch(String json) {
+    /** One page of search results, with the paging info needed to fetch more. */
+    public record SearchPage(List<SchematicEntry> results, int page,
+                            boolean hasMore, int total) {}
+
+    /**
+     * Parses the paged search response used by the Discover feed.
+     *
+     * Paging info stays on the page, not on each result, so callers can decide
+     * whether to fetch more without inspecting the list.
+     */
+    public static SearchPage parseSearchPage(String json) {
         JsonObject root = JsonParser.parseString(json).getAsJsonObject();
-        List<SearchResultEntry> results = new ArrayList<>();
+        List<SchematicEntry> out = new ArrayList<>();
+
         JsonArray arr = root.getAsJsonArray("results");
         if (arr != null) {
             for (JsonElement re : arr) {
+                if (!re.isJsonObject()) continue;
                 JsonObject r = re.getAsJsonObject();
-                results.add(new SearchResultEntry(
-                        new SchematicEntry(
-                                str(r, "id"), str(r, "title"),
-                                str(r, "description"), str(r, "ownerName"),
-                                str(r, "thumbnailUrl"),
-                                intVal(r, "downloadCount"),
-                                false),
-                        boolVal(root, "hasMore")));
+                out.add(new SchematicEntry(
+                        str(r, "id"),
+                        str(r, "title"),
+                        str(r, "description"),
+                        ownerName(r),
+                        str(r, "thumbnailUrl"),
+                        intVal(r, "downloads"),
+                        true, // search only returns published schematics
+                        intVal(r, "blockCount"),
+                        dim(r, "width"), dim(r, "height"), dim(r, "length")));
             }
         }
-        return results;
+
+        return new SearchPage(out,
+                root.has("page") ? intVal(root, "page") : 1,
+                boolVal(root, "hasMore"),
+                intVal(root, "total"));
+    }
+
+    /** Owner username from the nested owner object, when present. */
+    private static String ownerName(JsonObject obj) {
+        if (obj.has("owner") && obj.get("owner").isJsonObject()) {
+            return str(obj.getAsJsonObject("owner"), "username");
+        }
+        return str(obj, "ownerName");
     }
 
     public static String parseStatusTier(String json) {
@@ -82,7 +108,17 @@ public class ApiJsonParser {
                 str(obj, "description"), null,
                 str(obj, "thumbnailUrl"),
                 intVal(obj, "downloadCount"),
-                boolVal(obj, "isPublished"));
+                boolVal(obj, "isPublished"),
+                intVal(obj, "blockCount"),
+                dim(obj, "width"), dim(obj, "height"), dim(obj, "length"));
+    }
+
+    /** Reads a dimension out of the nested "dimensions" object. */
+    private static int dim(JsonObject obj, String key) {
+        if (obj.has("dimensions") && obj.get("dimensions").isJsonObject()) {
+            return intVal(obj.getAsJsonObject("dimensions"), key);
+        }
+        return 0;
     }
 
     private static String str(JsonObject obj, String key) {
@@ -101,5 +137,59 @@ public class ApiJsonParser {
     }
 
     public record LibraryData(List<BundleEntry> bundles, List<SchematicEntry> unbundled) {}
-    public record SearchResultEntry(SchematicEntry schematic, boolean hasMore) {}
+
+    // --- Palette parsing ---
+
+    public static List<PaletteEntry> parsePalettes(String json) {
+        List<PaletteEntry> palettes = new ArrayList<>();
+        JsonElement root = JsonParser.parseString(json);
+
+        // Handle both array response and object-with-array response
+        JsonArray arr;
+        if (root.isJsonArray()) {
+            arr = root.getAsJsonArray();
+        } else if (root.isJsonObject() && root.getAsJsonObject().has("palettes")) {
+            arr = root.getAsJsonObject().getAsJsonArray("palettes");
+        } else {
+            arr = root.isJsonArray() ? root.getAsJsonArray() : new JsonArray();
+        }
+
+        for (JsonElement pe : arr) {
+            palettes.add(parsePalette(pe.getAsJsonObject()));
+        }
+        return palettes;
+    }
+
+    public static PaletteEntry parseSinglePalette(String json) {
+        JsonObject obj = JsonParser.parseString(json).getAsJsonObject();
+        return parsePalette(obj);
+    }
+
+    private static PaletteEntry parsePalette(JsonObject obj) {
+        List<BlockMapping> mappings = new ArrayList<>();
+        JsonArray mappingsArr = obj.getAsJsonArray("mappings");
+        if (mappingsArr != null) {
+            for (JsonElement me : mappingsArr) {
+                JsonObject m = me.getAsJsonObject();
+                mappings.add(new BlockMapping(
+                        str(m, "id") != null ? str(m, "id") : "m-" + mappings.size(),
+                        str(m, "original"),
+                        str(m, "replacement"),
+                        null, null,
+                        !m.has("isValid") || boolVal(m, "isValid")
+                ));
+            }
+        }
+
+        return new PaletteEntry(
+                str(obj, "id"),
+                str(obj, "name"),
+                str(obj, "createdBy"),
+                str(obj, "schematicId"),
+                mappings,
+                str(obj, "visibility") != null ? str(obj, "visibility") : "private",
+                str(obj, "scope") != null ? str(obj, "scope") : "template",
+                intVal(obj, "revision")
+        );
+    }
 }

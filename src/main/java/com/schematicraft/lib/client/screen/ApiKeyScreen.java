@@ -8,10 +8,13 @@ import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.Style;
+import net.minecraft.util.FormattedCharSequence;
 
 import javax.annotation.Nullable;
 
-public class ApiKeyScreen extends Screen {
+public class ApiKeyScreen extends Screen
+        implements com.schematicraft.lib.client.gui.SchematicraftScreen {
     private static final org.slf4j.Logger LOGGER = com.mojang.logging.LogUtils.getLogger();
     @Nullable
     private final Screen parent;
@@ -34,8 +37,13 @@ public class ApiKeyScreen extends Screen {
         apiKeyField = new EditBox(this.font, centerX - 120, centerY - 20, 240, 20,
                 Component.literal("API Key"));
         apiKeyField.setMaxLength(128);
-        apiKeyField.setValue(ModConfig.getApiKey());
-        apiKeyField.setHint(Component.literal("sk_live_..."));
+        // Never render the stored key. It stays write-only from the UI so it
+        // cannot be read off the screen, a screenshot, or a stream.
+        apiKeyField.setValue("");
+        apiKeyField.setFormatter((text, offset) ->
+                FormattedCharSequence.forward("*".repeat(text.length()), Style.EMPTY));
+        apiKeyField.setHint(Component.literal(
+                ModConfig.hasApiKey() ? "Key saved. Enter a new key to replace it." : "sk_live_..."));
         this.addRenderableWidget(apiKeyField);
 
         validateButton = Button.builder(
@@ -66,7 +74,14 @@ public class ApiKeyScreen extends Screen {
         statusMessage = "\u00a7eValidating...";
         validateButton.active = false;
 
+        // Remember the previous key so a failed attempt does not discard a
+        // working credential.
+        final String previousKey = ModConfig.getApiKey();
         ModConfig.setApiKey(key);
+        if (!key.equals(previousKey)) {
+            // Different account or credential, so cached images no longer apply.
+            com.schematicraft.lib.client.ThumbnailCache.get().clear();
+        }
 
         SchematiCraftAPIWrapper.get().getStatus().thenAccept(statusJson -> {
             Minecraft.getInstance().execute(() -> {
@@ -92,8 +107,9 @@ public class ApiKeyScreen extends Screen {
             Minecraft.getInstance().execute(() -> {
                 validating = false;
                 validateButton.active = true;
-                statusMessage = "\u00a7cValidation failed: " + ex.getMessage();
-                ModConfig.setApiKey("");
+                statusMessage = "\u00a7cValidation failed. Check the key and try again.";
+                LOGGER.warn("API key validation failed: {}", ex.getClass().getSimpleName());
+                ModConfig.setApiKey(previousKey);
             });
             return null;
         });
@@ -111,6 +127,11 @@ public class ApiKeyScreen extends Screen {
         graphics.drawCenteredString(this.font,
                 Component.literal("Enter your API key from schematicraft.com"),
                 centerX, centerY - 38, 0xAAAAAA);
+
+        // Show where the key will be sent, so a redirected endpoint is visible.
+        graphics.drawCenteredString(this.font,
+                Component.literal("Sends to " + ModConfig.getServerHost()),
+                centerX, centerY - 28, 0x888888);
 
         if (!statusMessage.isEmpty()) {
             graphics.drawCenteredString(this.font, statusMessage, centerX, centerY + 36, 0xFFFFFF);

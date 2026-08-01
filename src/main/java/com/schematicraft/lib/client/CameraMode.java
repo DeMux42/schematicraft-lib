@@ -26,7 +26,12 @@ public class CameraMode {
     private static final int ESC_KEY = 256;
     private static final int CAPTURE_COOLDOWN_TICKS = 20; // 1 second at 20 TPS
     private static final int FLASH_DURATION_TICKS = 15; // ~0.75 seconds
-    private static final int MAX_IMAGES = 20;
+    /**
+     * Must match the server upload contract. The In-Game upload endpoint accepts
+     * at most 5 images and rejects the whole request with 413 beyond that, so
+     * capturing more here would fail at upload time.
+     */
+    private static final int MAX_IMAGES = 5;
 
     private static boolean active = false;
     private static List<Path> capturedImages;
