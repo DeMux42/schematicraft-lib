@@ -3,6 +3,7 @@ package com.schematicraft.lib.network;
 import com.schematicraft.api.SchematiCraftAPI;
 import com.schematicraft.lib.config.ModConfig;
 import com.schematicraft.lib.core.ApiJsonParser;
+import com.schematicraft.lib.core.IngameDownload;
 import com.schematicraft.lib.core.LibraryState;
 import com.mojang.logging.LogUtils;
 import org.slf4j.Logger;
@@ -175,31 +176,92 @@ public class SchematiCraftAPIWrapper {
         }
     }
 
+    /**
+     * Download for the target device, converted for the game this client runs.
+     *
+     * <p>With {@code confirm}, a conversion that would lose content a player
+     * cares about fails with {@link IngameDownload.ConfirmLoss}, saying what;
+     * call again without it once the player agrees.
+     */
     public CompletableFuture<SchematiCraftAPI.DownloadResult> downloadSchematic(
-            String schematicId, String format, String targetEditor) {
+            String schematicId, String format, String targetEditor, boolean confirm) {
+        return download(schematicId, format, targetEditor, null, confirm);
+    }
+
+    /** The game's own release, or null for a snapshot or a renamed build. */
+    @javax.annotation.Nullable
+    private static String gameRelease() {
+        return IngameDownload.release(
+                net.minecraft.SharedConstants.getCurrentVersion().getName());
+    }
+
+    /**
+     * One hand-written request for both downloads, so an error answer's body
+     * can be read: the API client turns every 409 into "analysis pending".
+     */
+    private CompletableFuture<SchematiCraftAPI.DownloadResult> download(
+            String schematicId, String format, String targetEditor,
+            @javax.annotation.Nullable String paletteId, boolean confirm) {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 requireDownloadTarget(format, targetEditor);
                 long t0 = System.currentTimeMillis();
+                String url = ModConfig.getServerUrl() + "/api/ingame/v1/schematics/"
+                        + urlEncode(schematicId) + "/download?"
+                        + IngameDownload.query(format, targetEditor, gameRelease(),
+                                paletteId, confirm);
+
+                java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder()
+                        .uri(java.net.URI.create(url))
+                        .timeout(DOWNLOAD_TIMEOUT)
+                        .header("Authorization", "Bearer " + ModConfig.getApiKey())
+                        .header("X-Schematicraft-Client", clientIdentifier)
+                        .GET().build();
+
                 java.nio.file.Path tempFile = java.nio.file.Files.createTempFile(
-                        "schematicraft_dl_", "." + format);
-                var result = createClient().download(
-                        schematicId, tempFile, format, targetEditor, null, null);
+                        paletteId != null ? "schematicraft_pal_" : "schematicraft_dl_",
+                        "." + format);
+                final java.net.http.HttpResponse<java.nio.file.Path> response;
+                try {
+                    response = HTTP_CLIENT.send(
+                            request, java.net.http.HttpResponse.BodyHandlers.ofFile(tempFile));
+                } catch (Exception sendFailure) {
+                    // Do not leave a partial download behind on timeout or error.
+                    java.nio.file.Files.deleteIfExists(tempFile);
+                    throw sendFailure;
+                }
+
+                int status = response.statusCode();
+                if (status >= 400) {
+                    String body = readError(tempFile);
+                    java.nio.file.Files.deleteIfExists(tempFile);
+                    IngameDownload.Loss loss = IngameDownload.parseConfirmLoss(status, body);
+                    if (loss != null) throw new IngameDownload.ConfirmLoss(loss);
+                    throw new RuntimeException(IngameDownload.failure(status, body));
+                }
+
+                String downloadId = response.headers().firstValue("X-Download-Id").orElse(null);
                 long size = java.nio.file.Files.size(tempFile);
-                LOGGER.info("[perf] download HTTP: {}ms, file: {} bytes, format: {}",
-                        System.currentTimeMillis() - t0, size, format);
-                return result;
-            } catch (SchematiCraftAPI.AnalysisPendingException e) {
-                throw new RuntimeException("Schematic is still being analyzed. Try again in a moment.");
-            } catch (SchematiCraftAPI.QuotaExceededException e) {
-                throw new RuntimeException("Download quota exceeded.");
-            } catch (SchematiCraftAPI.RateLimitException e) {
-                throw new RuntimeException("Too many requests. Wait a moment.");
+                LOGGER.info("[perf] download HTTP: {}ms, file: {} bytes, format: {}, palette: {}",
+                        System.currentTimeMillis() - t0, size, format, paletteId);
+                return new SchematiCraftAPI.DownloadResult(downloadId, tempFile, null);
+            } catch (IngameDownload.ConfirmLoss e) {
+                throw e;
             } catch (Exception e) {
                 LOGGER.error("Download failed for {}: {}", schematicId, e.getMessage());
-                throw new RuntimeException(e);
+                throw e instanceof RuntimeException r ? r : new RuntimeException(e);
             }
         }, executor);
+    }
+
+    /** An error answer streamed to a file, read whole up to a bound. */
+    private static String readError(java.nio.file.Path file) {
+        try (var in = java.nio.file.Files.newInputStream(file)) {
+            return new String(in.readNBytes(IngameDownload.MAX_ERROR_BYTES),
+                    java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     public CompletableFuture<String> createBundle(String name, String description) {
@@ -274,51 +336,9 @@ public class SchematiCraftAPIWrapper {
      */
     public CompletableFuture<SchematiCraftAPI.DownloadResult> downloadSchematicWithPalette(
             String schematicId, String paletteId, String format, String targetEditor) {
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                requireDownloadTarget(format, targetEditor);
-                long t0 = System.currentTimeMillis();
-                String url = ModConfig.getServerUrl() + "/api/ingame/v1/schematics/" + schematicId
-                        + "/download?format=" + urlEncode(format)
-                        + "&targetEditor=" + urlEncode(targetEditor)
-                        + "&paletteId=" + urlEncode(paletteId) + "&force=true";
-
-                java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder()
-                        .uri(java.net.URI.create(url))
-                        .timeout(DOWNLOAD_TIMEOUT)
-                        .header("Authorization", "Bearer " + ModConfig.getApiKey())
-                        .header("X-Schematicraft-Client", clientIdentifier)
-                        .GET().build();
-
-                java.nio.file.Path tempFile = java.nio.file.Files.createTempFile(
-                        "schematicraft_pal_", "." + format);
-                final java.net.http.HttpResponse<java.nio.file.Path> response;
-                try {
-                    response = HTTP_CLIENT.send(
-                            request, java.net.http.HttpResponse.BodyHandlers.ofFile(tempFile));
-                } catch (Exception sendFailure) {
-                    // Do not leave a partial download behind on timeout or error.
-                    java.nio.file.Files.deleteIfExists(tempFile);
-                    throw sendFailure;
-                }
-
-                if (response.statusCode() >= 400) {
-                    String body = readTruncated(tempFile);
-                    java.nio.file.Files.deleteIfExists(tempFile);
-                    throw new RuntimeException("HTTP " + response.statusCode() + ": " + body);
-                }
-
-                String downloadId = response.headers().firstValue("X-Download-Id").orElse(null);
-                long size = java.nio.file.Files.size(tempFile);
-                LOGGER.info("[perf] download+palette HTTP: {}ms, file: {} bytes, palette: {}",
-                        System.currentTimeMillis() - t0, size, paletteId);
-
-                return new SchematiCraftAPI.DownloadResult(downloadId, tempFile, null);
-            } catch (Exception e) {
-                LOGGER.error("Download with palette failed for {}: {}", schematicId, e.getMessage());
-                throw new RuntimeException(e);
-            }
-        }, executor);
+        // The server converts a palette download itself, without the engine's
+        // report, so there is nothing to confirm.
+        return download(schematicId, format, targetEditor, paletteId, false);
     }
 
     private String httpGet(String url) throws Exception {
@@ -364,24 +384,6 @@ public class SchematiCraftAPIWrapper {
         return single.length() <= MAX_ERROR_CHARS
                 ? single
                 : single.substring(0, MAX_ERROR_CHARS) + "\u2026";
-    }
-
-    /** Read a bounded amount of an error response that was streamed to a file. */
-    private static String readTruncated(java.nio.file.Path file) {
-        try {
-            long size = java.nio.file.Files.size(file);
-            if (size > MAX_ERROR_CHARS * 4L) {
-                byte[] head = new byte[MAX_ERROR_CHARS];
-                try (var in = java.nio.file.Files.newInputStream(file)) {
-                    int read = in.read(head);
-                    return read <= 0 ? "" : truncate(new String(head, 0, read,
-                            java.nio.charset.StandardCharsets.UTF_8));
-                }
-            }
-            return truncate(java.nio.file.Files.readString(file));
-        } catch (Exception e) {
-            return "";
-        }
     }
 
     private static String escapeJson(String s) {

@@ -40,7 +40,18 @@ sourceSets.main.java.srcDir '../../api-clients/java/src'
 
 dependencies {
     compileOnly 'com.google.code.gson:gson:2.10.1'
+    testImplementation 'com.google.code.gson:gson:2.10.1'
 }
+
+// The checks of the code with no Minecraft class in it, as plain programs
+// that throw on a failure, so the library takes no test framework.
+tasks.register('selfCheck', JavaExec) {
+    description = 'Runs the library checks that need no game.'
+    group = 'verification'
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.schematicraft.lib.core.IngameDownloadCheck'
+}
+tasks.named('check') { dependsOn 'selfCheck' }
 
 publishing {
     publications {
