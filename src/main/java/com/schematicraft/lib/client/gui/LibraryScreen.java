@@ -6,6 +6,7 @@ import com.schematicraft.lib.client.ThumbnailCache;
 import com.schematicraft.lib.config.ModConfig;
 import com.schematicraft.lib.core.BundleEntry;
 import com.schematicraft.lib.core.DiscoverState;
+import com.schematicraft.lib.core.IngameDownload;
 import com.schematicraft.lib.core.LibraryState;
 import com.schematicraft.lib.core.SchematicEntry;
 import com.schematicraft.lib.network.SchematiCraftAPIWrapper;
@@ -1578,9 +1579,19 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
             return;
         }
 
+        download(selected, limits, true);
+    }
+
+    /**
+     * Download and load. With {@code confirm}, a conversion that would lose
+     * content opens {@link ConfirmLossScreen} first, whose "Load anyway"
+     * downloads again without asking.
+     */
+    private void download(SchematicEntry selected, LoadLimits limits, boolean confirm) {
         setStatus("Downloading...", GuiColors.INFO, 0);
         SchematiCraftAPIWrapper.get().downloadSchematic(
-                selected.id(), targetDevice.getDownloadFormat(), targetDevice.getDownloadEditor())
+                selected.id(), targetDevice.getDownloadFormat(), targetDevice.getDownloadEditor(),
+                confirm)
                 .thenAccept(result -> {
             Minecraft.getInstance().execute(() -> {
                 try {
@@ -1664,6 +1675,13 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
             });
         }).exceptionally(ex -> {
             Minecraft.getInstance().execute(() -> {
+                IngameDownload.Loss loss = IngameDownload.lossOf(ex);
+                if (loss != null && Minecraft.getInstance().screen == this) {
+                    setStatus("", GuiColors.TEXT_DIM, 0);
+                    Minecraft.getInstance().setScreen(new ConfirmLossScreen(
+                            this, loss, () -> download(selected, limits, false)));
+                    return;
+                }
                 String msg = SchematiCraftAPIWrapper.rootMessage(ex);
                 setStatus(msg, GuiColors.ERROR, 4000);
             });
