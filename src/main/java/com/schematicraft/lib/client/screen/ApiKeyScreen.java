@@ -3,7 +3,7 @@ package com.schematicraft.lib.client.screen;
 import com.schematicraft.lib.config.ModConfig;
 import com.schematicraft.lib.network.SchematiCraftAPIWrapper;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
@@ -40,7 +40,7 @@ public class ApiKeyScreen extends Screen
         // Never render the stored key. It stays write-only from the UI so it
         // cannot be read off the screen, a screenshot, or a stream.
         apiKeyField.setValue("");
-        apiKeyField.setFormatter((text, offset) ->
+        apiKeyField.addFormatter((text, offset) ->
                 FormattedCharSequence.forward("*".repeat(text.length()), Style.EMPTY));
         apiKeyField.setHint(Component.literal(
                 ModConfig.hasApiKey() ? "Key saved. Enter a new key to replace it." : "sk_live_..."));
@@ -116,25 +116,25 @@ public class ApiKeyScreen extends Screen
     }
 
     @Override
-    public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        super.render(graphics, mouseX, mouseY, partialTick);
+    public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
+        super.extractRenderState(graphics, mouseX, mouseY, partialTick);
 
         int centerX = this.width / 2;
         int centerY = this.height / 2;
 
-        graphics.drawCenteredString(this.font, this.title, centerX, centerY - 50, 0xFFFFFF);
+        graphics.centeredText(this.font, this.title, centerX, centerY - 50, 0xFFFFFF);
 
-        graphics.drawCenteredString(this.font,
+        graphics.centeredText(this.font,
                 Component.literal("Enter your API key from schematicraft.com"),
                 centerX, centerY - 38, 0xAAAAAA);
 
         // Show where the key will be sent, so a redirected endpoint is visible.
-        graphics.drawCenteredString(this.font,
+        graphics.centeredText(this.font,
                 Component.literal("Sends to " + ModConfig.getServerHost()),
                 centerX, centerY - 28, 0x888888);
 
         if (!statusMessage.isEmpty()) {
-            graphics.drawCenteredString(this.font, statusMessage, centerX, centerY + 36, 0xFFFFFF);
+            graphics.centeredText(this.font, statusMessage, centerX, centerY + 36, 0xFFFFFF);
         }
     }
 

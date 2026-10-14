@@ -7,9 +7,11 @@ import com.schematicraft.lib.core.PaletteEntry;
 import com.schematicraft.lib.core.SchematicEntry;
 import com.schematicraft.lib.network.SchematiCraftAPIWrapper;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.input.KeyEvent;
+import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
 import org.lwjgl.glfw.GLFW;
 import org.slf4j.Logger;
@@ -128,21 +130,21 @@ public class PaletteScreen extends Screen implements SchematicraftScreen {
     }
 
     @Override
-    public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+    public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
         graphics.fill(0, 0, this.width, this.height, GuiColors.SCREEN_BG);
 
         renderHeader(graphics);
 
         if (loading) {
-            graphics.drawCenteredString(this.font, "Loading palettes...",
+            graphics.centeredText(this.font, "Loading palettes...",
                     this.width / 2, this.height / 2, GuiColors.TEXT_SECONDARY);
         } else if (errorMessage != null) {
-            graphics.drawCenteredString(this.font, errorMessage,
+            graphics.centeredText(this.font, errorMessage,
                     this.width / 2, this.height / 2, GuiColors.ERROR);
         } else if (palettes.isEmpty()) {
-            graphics.drawCenteredString(this.font, "No palettes for this schematic",
+            graphics.centeredText(this.font, "No palettes for this schematic",
                     this.width / 2, this.height / 2 - 6, GuiColors.TEXT_SECONDARY);
-            graphics.drawCenteredString(this.font, "Create palettes on schematicraft.com",
+            graphics.centeredText(this.font, "Create palettes on schematicraft.com",
                     this.width / 2, this.height / 2 + 6, GuiColors.TEXT_DIM);
         } else {
             renderPaletteGrid(graphics, mouseX, mouseY);
@@ -153,11 +155,11 @@ public class PaletteScreen extends Screen implements SchematicraftScreen {
 
         // Failure message sits above the footer so the palette grid stays visible.
         if (!statusText.isEmpty()) {
-            graphics.drawCenteredString(this.font, statusText,
+            graphics.centeredText(this.font, statusText,
                     this.width / 2, this.height - FOOTER_H - 12, GuiColors.ERROR);
         }
 
-        super.render(graphics, mouseX, mouseY, partialTick);
+        super.extractRenderState(graphics, mouseX, mouseY, partialTick);
     }
 
     private void failLoad(String reason) {
@@ -168,21 +170,21 @@ public class PaletteScreen extends Screen implements SchematicraftScreen {
     }
 
     @Override
-    public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+    public void extractBackground(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
         // Skip default
     }
 
-    private void renderHeader(GuiGraphics graphics) {
+    private void renderHeader(GuiGraphicsExtractor graphics) {
         graphics.fill(0, 0, this.width, HEADER_H, GuiColors.PANEL_BG);
         graphics.fill(0, HEADER_H - 1, this.width, HEADER_H, GuiColors.BORDER_SEPARATOR);
 
         String title = "Palettes for: " + (schematic.title() != null ? schematic.title() : "Untitled");
-        graphics.drawString(this.font, title, CARD_PADDING, 6, GuiColors.SELECTED, false);
-        graphics.drawString(this.font, "Select a palette, then download", CARD_PADDING, 18,
+        graphics.text(this.font, title, CARD_PADDING, 6, GuiColors.SELECTED, false);
+        graphics.text(this.font, "Select a palette, then download", CARD_PADDING, 18,
                 GuiColors.TEXT_DIM, false);
     }
 
-    private void renderPaletteGrid(GuiGraphics graphics, int mouseX, int mouseY) {
+    private void renderPaletteGrid(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
         graphics.enableScissor(0, gridTop, this.width, gridBottom);
 
         int y = gridTop + CARD_PADDING - scrollOffset;
@@ -204,7 +206,7 @@ public class PaletteScreen extends Screen implements SchematicraftScreen {
         graphics.disableScissor();
     }
 
-    private void renderPaletteCard(GuiGraphics graphics, PaletteEntry palette,
+    private void renderPaletteCard(GuiGraphicsExtractor graphics, PaletteEntry palette,
                                     int x, int y, int index, int mouseX, int mouseY) {
         boolean selected = index == selectedIndex;
         boolean hovered = mouseX >= x && mouseX < x + cardW && mouseY >= y && mouseY < y + cardH;
@@ -215,15 +217,15 @@ public class PaletteScreen extends Screen implements SchematicraftScreen {
         drawBorder(graphics, x, y, cardW, cardH, border);
 
         String name = palette.name() != null ? palette.name() : "Unnamed";
-        graphics.drawString(this.font, truncate(name, cardW - 8),
+        graphics.text(this.font, truncate(name, cardW - 8),
                 x + 4, y + 4, selected ? GuiColors.SELECTED : GuiColors.TEXT_PRIMARY, false);
 
-        graphics.drawString(this.font, palette.mappingCount() + " mappings",
+        graphics.text(this.font, palette.mappingCount() + " mappings",
                 x + 4, y + 16, GuiColors.TEXT_DIM, false);
 
         String vis = palette.visibility();
         int visColor = "public".equals(vis) ? GuiColors.SUCCESS : GuiColors.TEXT_DIM;
-        graphics.drawString(this.font, vis, x + cardW - this.font.width(vis) - 4, y + 4, visColor, false);
+        graphics.text(this.font, vis, x + cardW - this.font.width(vis) - 4, y + 4, visColor, false);
 
         int mappingY = y + 30;
         List<BlockMapping> mappings = palette.mappings();
@@ -231,11 +233,11 @@ public class PaletteScreen extends Screen implements SchematicraftScreen {
         for (int i = 0; i < shown; i++) {
             BlockMapping m = mappings.get(i);
             String line = shortBlockName(m.original()) + " to " + shortBlockName(m.replacement());
-            graphics.drawString(this.font, truncate(line, cardW - 8),
+            graphics.text(this.font, truncate(line, cardW - 8),
                     x + 4, mappingY + i * MAPPING_ROW_H, GuiColors.TEXT_SECONDARY, false);
         }
         if (mappings.size() > shown) {
-            graphics.drawString(this.font, "+" + (mappings.size() - shown) + " more",
+            graphics.text(this.font, "+" + (mappings.size() - shown) + " more",
                     x + 4, mappingY + shown * MAPPING_ROW_H, GuiColors.TEXT_DIM, false);
         }
     }
@@ -243,7 +245,10 @@ public class PaletteScreen extends Screen implements SchematicraftScreen {
     // --- Input ---
 
     @Override
-    public boolean mouseClicked(double mouseX, double mouseY, int button) {
+    public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
+        double mouseX = event.x();
+        double mouseY = event.y();
+        int button = event.button();
         if (mouseY >= gridTop && mouseY < gridBottom && button == 0) {
             int clickedIndex = getCardIndexAt(mouseX, mouseY);
             if (clickedIndex >= 0 && clickedIndex < palettes.size()) {
@@ -252,7 +257,7 @@ public class PaletteScreen extends Screen implements SchematicraftScreen {
                 return true;
             }
         }
-        return super.mouseClicked(mouseX, mouseY, button);
+        return super.mouseClicked(event, doubleClick);
     }
 
     @Override
@@ -265,7 +270,8 @@ public class PaletteScreen extends Screen implements SchematicraftScreen {
     }
 
     @Override
-    public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+    public boolean keyPressed(KeyEvent event) {
+        int keyCode = event.key();
         if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
             Minecraft.getInstance().setScreen(new LibraryScreen(journey));
             return true;
@@ -274,7 +280,7 @@ public class PaletteScreen extends Screen implements SchematicraftScreen {
             downloadWithPalette();
             return true;
         }
-        return super.keyPressed(keyCode, scanCode, modifiers);
+        return super.keyPressed(event);
     }
 
     @Override
@@ -382,7 +388,7 @@ public class PaletteScreen extends Screen implements SchematicraftScreen {
         return text.substring(0, lo) + ellipsis;
     }
 
-    private static void drawBorder(GuiGraphics graphics, int x, int y, int w, int h, int color) {
+    private static void drawBorder(GuiGraphicsExtractor graphics, int x, int y, int w, int h, int color) {
         graphics.fill(x, y, x + w, y + 1, color);
         graphics.fill(x, y + h - 1, x + w, y + h, color);
         graphics.fill(x, y, x + 1, y + h, color);

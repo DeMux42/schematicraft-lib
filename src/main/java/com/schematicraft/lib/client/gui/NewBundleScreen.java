@@ -3,10 +3,12 @@ package com.schematicraft.lib.client.gui;
 import com.mojang.logging.LogUtils;
 import com.schematicraft.lib.network.SchematiCraftAPIWrapper;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.input.CharacterEvent;
+import net.minecraft.client.input.KeyEvent;
 import net.minecraft.network.chat.Component;
 import org.lwjgl.glfw.GLFW;
 import org.slf4j.Logger;
@@ -106,48 +108,48 @@ public class NewBundleScreen extends Screen implements SchematicraftScreen {
     }
 
     @Override
-    public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+    public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
         graphics.fill(0, 0, this.width, this.height, GuiColors.SCREEN_BG);
 
-        graphics.drawCenteredString(this.font, "New bundle",
+        graphics.centeredText(this.font, "New bundle",
                 this.width / 2, this.height / 2 - 44, GuiColors.SELECTED);
-        graphics.drawCenteredString(this.font, "Bundles group schematics in your library",
+        graphics.centeredText(this.font, "Bundles group schematics in your library",
                 this.width / 2, this.height / 2 - 32, GuiColors.TEXT_DIM);
 
-        super.render(graphics, mouseX, mouseY, partialTick);
+        super.extractRenderState(graphics, mouseX, mouseY, partialTick);
 
         if (!statusText.isEmpty()) {
-            graphics.drawCenteredString(this.font, statusText,
+            graphics.centeredText(this.font, statusText,
                     this.width / 2, this.height / 2 + 54, statusColor);
         }
     }
 
     @Override
-    public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+    public void extractBackground(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
         // Skip default
     }
 
     @Override
-    public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
-        if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
+    public boolean keyPressed(KeyEvent event) {
+        if (event.key() == GLFW.GLFW_KEY_ESCAPE) {
             close();
             return true;
         }
-        if (keyCode == GLFW.GLFW_KEY_ENTER || keyCode == GLFW.GLFW_KEY_KP_ENTER) {
+        if (event.key() == GLFW.GLFW_KEY_ENTER || event.key() == GLFW.GLFW_KEY_KP_ENTER) {
             submit();
             return true;
         }
         // Everything else goes to the field, which also stops game keybinds firing.
         if (nameField != null) {
-            return nameField.keyPressed(keyCode, scanCode, modifiers);
+            return nameField.keyPressed(event);
         }
-        return super.keyPressed(keyCode, scanCode, modifiers);
+        return super.keyPressed(event);
     }
 
     @Override
-    public boolean charTyped(char codePoint, int modifiers) {
-        if (nameField != null) return nameField.charTyped(codePoint, modifiers);
-        return super.charTyped(codePoint, modifiers);
+    public boolean charTyped(CharacterEvent event) {
+        if (nameField != null) return nameField.charTyped(event);
+        return super.charTyped(event);
     }
 
     @Override
