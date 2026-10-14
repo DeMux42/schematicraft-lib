@@ -1,44 +1,45 @@
 plugins {
     id 'java-library'
+    id 'eclipse'
+    id 'idea'
     id 'maven-publish'
-    id 'net.neoforged.moddev' version '2.0.141'
+    id 'net.minecraftforge.gradle' version '[6.0,6.2)'
+    id 'org.parchmentmc.librarian.forgegradle' version '1.+'
 }
 
 version = mod_version
 group = mod_group_id
 
-repositories {
-    mavenLocal()
-    mavenCentral()
-}
-
 base {
     archivesName = mod_id
 }
 
-java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+// Forge 1.20.1 runs on Java 17.
+java.toolchain.languageVersion = JavaLanguageVersion.of(17)
 
-neoForge {
-    version = project.neo_version
-
-    parchment {
-        mappingsVersion = project.parchment_mappings_version
-        minecraftVersion = project.parchment_minecraft_version
-    }
-
-    mods {
-        "${mod_id}" {
-            sourceSet(sourceSets.main)
-        }
-    }
+minecraft {
+    mappings channel: 'parchment', version: "${parchment_mappings_version}-${parchment_minecraft_version}"
 }
 
 // Include the official API client source directly in compilation.
 // The API client has zero MC dependencies and is bundled into the lib jar.
-// Source of truth: api-clients/java/ (separate public repo)
+// Source of truth: api-clients/java/ (separate public repo).
 sourceSets.main.java.srcDir '../../api-clients/java/src'
 
+repositories {
+    // mavenLocal() is intentionally absent. It takes precedence over remote
+    // repositories, so a stale or poisoned artifact in the local cache would
+    // silently enter the build.
+    mavenCentral()
+    maven {
+        name = 'ParchmentMC'
+        url = 'https://maven.parchmentmc.org'
+    }
+}
+
 dependencies {
+    minecraft "net.minecraftforge:forge:${forge_version}"
+
     compileOnly 'com.google.code.gson:gson:2.10.1'
     testImplementation 'com.google.code.gson:gson:2.10.1'
 }

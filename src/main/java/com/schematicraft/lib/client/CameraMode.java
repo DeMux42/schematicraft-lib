@@ -6,9 +6,9 @@ import com.mojang.logging.LogUtils;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
-import net.neoforged.neoforge.client.event.InputEvent;
-import net.neoforged.neoforge.client.event.RenderGuiLayerEvent;
-import net.neoforged.neoforge.common.NeoForge;
+import net.minecraftforge.client.event.InputEvent;
+import net.minecraftforge.client.event.RenderGuiOverlayEvent;
+import net.minecraftforge.common.MinecraftForge;
 import org.slf4j.Logger;
 
 import java.nio.file.Files;
@@ -47,9 +47,9 @@ public class CameraMode {
     public static void registerEvents() {
         if (eventsRegistered) return;
         eventsRegistered = true;
-        NeoForge.EVENT_BUS.addListener(CameraMode::onRenderGuiLayer);
-        NeoForge.EVENT_BUS.addListener(CameraMode::onMouseClick);
-        NeoForge.EVENT_BUS.addListener(CameraMode::onKeyInput);
+        MinecraftForge.EVENT_BUS.addListener(CameraMode::onRenderGuiOverlay);
+        MinecraftForge.EVENT_BUS.addListener(CameraMode::onMouseClick);
+        MinecraftForge.EVENT_BUS.addListener(CameraMode::onKeyInput);
         LOGGER.info("CameraMode events registered");
     }
 
@@ -86,7 +86,7 @@ public class CameraMode {
 
     public static boolean isActive() { return active; }
 
-    public static void onRenderGuiLayer(RenderGuiLayerEvent.Post event) {
+    public static void onRenderGuiOverlay(RenderGuiOverlayEvent.Post event) {
         if (!active) return;
 
         // When a capture is pending, skip drawing the overlay so the framebuffer is clean,

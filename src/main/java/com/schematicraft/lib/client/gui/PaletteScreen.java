@@ -168,7 +168,7 @@ public class PaletteScreen extends Screen implements SchematicraftScreen {
     }
 
     @Override
-    public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+    public void renderBackground(GuiGraphics graphics) {
         // Skip default
     }
 
@@ -256,12 +256,12 @@ public class PaletteScreen extends Screen implements SchematicraftScreen {
     }
 
     @Override
-    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+    public boolean mouseScrolled(double mouseX, double mouseY, double delta) {
         if (mouseY >= gridTop && mouseY < gridBottom) {
-            scrollOffset = Math.max(0, Math.min(maxScroll, scrollOffset - (int)(scrollY * 30)));
+            scrollOffset = Math.max(0, Math.min(maxScroll, scrollOffset - (int)(delta * 30)));
             return true;
         }
-        return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        return super.mouseScrolled(mouseX, mouseY, delta);
     }
 
     @Override

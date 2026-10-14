@@ -493,7 +493,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
     }
 
     @Override
-    public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+    public void renderBackground(GuiGraphics graphics) {
         // Skip default dirt background
     }
 
@@ -1478,20 +1478,19 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
     }
 
     @Override
-    public boolean mouseScrolled(double mouseX, double mouseY,
-                                  double scrollX, double scrollY) {
+    public boolean mouseScrolled(double mouseX, double mouseY, double delta) {
         if (previewExpanded) {
-            com.schematicraft.lib.client.preview.SchematicPreviewRenderer.get().zoom((float) scrollY);
+            com.schematicraft.lib.client.preview.SchematicPreviewRenderer.get().zoom((float) delta);
             return true;
         }
         if (mouseY >= gridTop && mouseY < gridBottom) {
-            int scrollAmount = (int) (-scrollY * (tileTotalH + TILE_GAP));
+            int scrollAmount = (int) (-delta * (tileTotalH + TILE_GAP));
             gridState.scroll(scrollAmount);
             gridState.clampScroll(maxScroll);
             maybeLoadMoreDiscover();
             return true;
         }
-        return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        return super.mouseScrolled(mouseX, mouseY, delta);
     }
 
     @Override

@@ -395,15 +395,15 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
     }
 
     @Override
-    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+    public boolean mouseScrolled(double mouseX, double mouseY, double delta) {
         if (dropdownOpen) {
             List<String> rows = dropdownRows();
             int maxScroll = Math.max(0, rows.size() - DROP_MAX_ROWS);
             dropdownScroll = Math.max(0,
-                    Math.min(maxScroll, dropdownScroll - (int) Math.signum(scrollY)));
+                    Math.min(maxScroll, dropdownScroll - (int) Math.signum(delta)));
             return true;
         }
-        return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        return super.mouseScrolled(mouseX, mouseY, delta);
     }
 
     /**
@@ -431,7 +431,7 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
     }
 
     @Override
-    public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+    public void renderBackground(GuiGraphics graphics) {
         // Skip default
     }
 
