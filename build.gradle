@@ -8,7 +8,6 @@ version = mod_version
 group = mod_group_id
 
 repositories {
-    mavenLocal()
     mavenCentral()
 }
 
@@ -16,15 +15,11 @@ base {
     archivesName = mod_id
 }
 
-java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+// NeoForge 26.1 (Minecraft 26.1) runs on Java 25.
+java.toolchain.languageVersion = JavaLanguageVersion.of(25)
 
 neoForge {
     version = project.neo_version
-
-    parchment {
-        mappingsVersion = project.parchment_mappings_version
-        minecraftVersion = project.parchment_minecraft_version
-    }
 
     mods {
         "${mod_id}" {
