@@ -4,7 +4,7 @@ import com.schematicraft.lib.core.BundleEntry;
 import com.schematicraft.lib.core.LibraryState;
 import com.schematicraft.lib.core.SchematicEntry;
 
-import javax.annotation.Nullable;
+import org.jetbrains.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;

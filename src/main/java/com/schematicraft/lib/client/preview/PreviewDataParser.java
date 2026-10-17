@@ -1,20 +1,20 @@
 package com.schematicraft.lib.client.preview;
 
 import com.mojang.logging.LogUtils;
-import net.minecraft.commands.arguments.blocks.BlockStateParser;
-import net.minecraft.core.BlockPos;
-import net.minecraft.core.HolderLookup;
-import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.nbt.CompoundTag;
-import net.minecraft.nbt.ListTag;
-import net.minecraft.nbt.Tag;
-import net.minecraft.nbt.TagParser;
-import net.minecraft.world.level.block.Block;
-import net.minecraft.world.level.block.Blocks;
-import net.minecraft.world.level.block.state.BlockState;
+
+import net.minecraft.util.math.BlockPos;
+
+import net.minecraft.registry.Registries;
+import net.minecraft.nbt.NbtCompound;
+import net.minecraft.nbt.NbtList;
+import net.minecraft.nbt.NbtElement;
+import net.minecraft.nbt.StringNbtReader;
+import net.minecraft.block.Block;
+import net.minecraft.block.Blocks;
+import net.minecraft.block.BlockState;
 import org.slf4j.Logger;
 
-import javax.annotation.Nullable;
+import org.jetbrains.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -47,32 +47,32 @@ public class PreviewDataParser {
             }
 
             String snbt = root.get("statePosArrayList").getAsString();
-            CompoundTag nbt = TagParser.parseTag(snbt);
+            NbtCompound nbt = StringNbtReader.parse(snbt);
 
             // Parse blockstatemap (palette)
-            ListTag paletteList = nbt.getList("blockstatemap", Tag.TAG_COMPOUND);
+            NbtList paletteList = nbt.getList("blockstatemap", NbtElement.COMPOUND_TYPE);
             List<BlockState> palette = new ArrayList<>();
             for (int i = 0; i < paletteList.size(); i++) {
-                CompoundTag entry = paletteList.getCompound(i);
+                NbtCompound entry = paletteList.getCompound(i);
                 BlockState state = parseBlockState(entry);
                 palette.add(state);
             }
 
             // Parse statelist (positions + palette indices)
-            ListTag stateList = nbt.getList("statelist", Tag.TAG_COMPOUND);
+            NbtList stateList = nbt.getList("statelist", NbtElement.COMPOUND_TYPE);
             List<PreviewBlockData.BlockEntry> blocks = new ArrayList<>();
 
             int minX = Integer.MAX_VALUE, minY = Integer.MAX_VALUE, minZ = Integer.MAX_VALUE;
             int maxX = Integer.MIN_VALUE, maxY = Integer.MIN_VALUE, maxZ = Integer.MIN_VALUE;
 
             for (int i = 0; i < stateList.size(); i++) {
-                CompoundTag entry = stateList.getCompound(i);
+                NbtCompound entry = stateList.getCompound(i);
 
                 // Position
                 int[] pos;
                 if (entry.contains("pos")) {
                     var posTag = entry.get("pos");
-                    if (posTag instanceof ListTag posList) {
+                    if (posTag instanceof NbtList posList) {
                         pos = new int[]{posList.getInt(0), posList.getInt(1), posList.getInt(2)};
                     } else {
                         continue;
@@ -127,7 +127,7 @@ public class PreviewDataParser {
         List<PreviewBlockData.BlockEntry> newBlocks = new ArrayList<>(original.blocks().size());
         for (PreviewBlockData.BlockEntry entry : original.blocks()) {
             BlockState state = entry.state();
-            String blockName = BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString();
+            String blockName = Registries.BLOCK.getId(state.getBlock()).toString();
 
             String replacement = mappings.get(blockName);
             if (replacement != null) {
@@ -146,29 +146,29 @@ public class PreviewDataParser {
      * Parse a BlockState from a BG2 blockstatemap NBT entry.
      * Format: {Name:"minecraft:stone", Properties:{variant:"smooth"}}
      */
-    private static BlockState parseBlockState(CompoundTag entry) {
+    private static BlockState parseBlockState(NbtCompound entry) {
         String name = entry.getString("Name");
-        if (name.isEmpty()) return Blocks.AIR.defaultBlockState();
+        if (name.isEmpty()) return Blocks.AIR.getDefaultState();
 
-        Block block = BuiltInRegistries.BLOCK.get(
-                net.minecraft.resources.ResourceLocation.tryParse(name));
+        Block block = Registries.BLOCK.get(
+                net.minecraft.util.Identifier.tryParse(name));
         if (block == null || block == Blocks.AIR) {
             // Try without namespace
             if (!name.contains(":")) {
-                block = BuiltInRegistries.BLOCK.get(
-                        net.minecraft.resources.ResourceLocation.tryParse("minecraft:" + name));
+                block = Registries.BLOCK.get(
+                        net.minecraft.util.Identifier.tryParse("minecraft:" + name));
             }
-            if (block == null) return Blocks.AIR.defaultBlockState();
+            if (block == null) return Blocks.AIR.getDefaultState();
         }
 
-        BlockState state = block.defaultBlockState();
+        BlockState state = block.getDefaultState();
 
         // Apply properties if present
-        if (entry.contains("Properties", Tag.TAG_COMPOUND)) {
-            CompoundTag props = entry.getCompound("Properties");
-            for (String key : props.getAllKeys()) {
+        if (entry.contains("Properties", NbtElement.COMPOUND_TYPE)) {
+            NbtCompound props = entry.getCompound("Properties");
+            for (String key : props.getKeys()) {
                 String value = props.getString(key);
-                var property = block.getStateDefinition().getProperty(key);
+                var property = block.getStateManager().getProperty(key);
                 if (property != null) {
                     state = applyProperty(state, property, value);
                 }
@@ -183,15 +183,15 @@ public class PreviewDataParser {
      * where applicable.
      */
     private static BlockState resolveBlockState(String blockName, BlockState original) {
-        Block block = BuiltInRegistries.BLOCK.get(
-                net.minecraft.resources.ResourceLocation.tryParse(blockName));
+        Block block = Registries.BLOCK.get(
+                net.minecraft.util.Identifier.tryParse(blockName));
         if (block == null || block == Blocks.AIR) return original;
 
-        BlockState state = block.defaultBlockState();
+        BlockState state = block.getDefaultState();
 
         // Try to carry over compatible properties from the original
         for (var prop : original.getProperties()) {
-            var targetProp = block.getStateDefinition().getProperty(prop.getName());
+            var targetProp = block.getStateManager().getProperty(prop.getName());
             if (targetProp != null) {
                 state = copyProperty(state, original, prop, targetProp);
             }
@@ -202,23 +202,23 @@ public class PreviewDataParser {
 
     @SuppressWarnings({"unchecked", "rawtypes"})
     private static BlockState applyProperty(BlockState state,
-                                             net.minecraft.world.level.block.state.properties.Property property,
+                                             net.minecraft.state.property.Property property,
                                              String value) {
-        var optional = property.getValue(value);
+        var optional = property.parse(value);
         if (optional.isPresent()) {
-            return state.setValue(property, (Comparable) optional.get());
+            return state.with(property, (Comparable) optional.get());
         }
         return state;
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
     private static BlockState copyProperty(BlockState target, BlockState source,
-                                            net.minecraft.world.level.block.state.properties.Property sourceProp,
-                                            net.minecraft.world.level.block.state.properties.Property targetProp) {
+                                            net.minecraft.state.property.Property sourceProp,
+                                            net.minecraft.state.property.Property targetProp) {
         try {
-            Comparable value = source.getValue(sourceProp);
-            if (targetProp.getPossibleValues().contains(value)) {
-                return target.setValue(targetProp, value);
+            Comparable value = source.get(sourceProp);
+            if (targetProp.getValues().contains(value)) {
+                return target.with(targetProp, value);
             }
         } catch (Exception ignored) {}
         return target;

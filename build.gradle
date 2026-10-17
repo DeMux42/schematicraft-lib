@@ -59,6 +59,15 @@ tasks.register('selfCheck', JavaExec) {
 }
 tasks.named('check') { dependsOn 'selfCheck' }
 
+// Gradle 9 defaults the Test task's failOnNoDiscoveredTests to true. The lib's
+// src/test holds only the plain-main IngameDownloadCheck run by selfCheck (its
+// real verification), not a JUnit suite, so `build` (check -> test) would fail on
+// "no tests discovered". selfCheck is the gate; make test a no-op success. No
+// source change, jar unaffected. (Matches the NeoForge 26.1 p3d fix.)
+tasks.named('test', Test) {
+    failOnNoDiscoveredTests = false
+}
+
 processResources {
     inputs.property "version", project.version
     filesMatching("fabric.mod.json") {

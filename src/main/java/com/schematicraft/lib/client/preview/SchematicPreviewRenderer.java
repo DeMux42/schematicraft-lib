@@ -1,38 +1,39 @@
 package com.schematicraft.lib.client.preview;
 
-import com.mojang.blaze3d.systems.RenderSystem;
-import com.mojang.blaze3d.vertex.BufferBuilder;
-import com.mojang.blaze3d.vertex.PoseStack;
-import com.mojang.blaze3d.vertex.VertexBuffer;
-import com.mojang.blaze3d.vertex.VertexSorting;
 import com.mojang.logging.LogUtils;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.client.renderer.ItemBlockRenderTypes;
-import net.minecraft.client.renderer.RenderType;
-import net.minecraft.client.renderer.block.BlockRenderDispatcher;
-import net.minecraft.client.resources.model.BakedModel;
-import net.minecraft.util.RandomSource;
-import net.minecraft.world.level.block.state.BlockState;
-import org.joml.Matrix4f;
-import org.joml.Quaternionf;
+import net.minecraft.client.gui.DrawContext;
+import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
-
-import javax.annotation.Nullable;
-import java.util.HashMap;
-import java.util.Map;
 
 /**
  * Universal 3D schematic preview renderer. No editor mod dependencies.
- * Uses vanilla Minecraft's BlockRenderDispatcher to bake block models into VBOs.
  *
- * Supports:
- * - Auto-rotation (small preview in LibraryScreen)
- * - Interactive rotation/zoom (expanded overlay)
- * - Palette-applied previews (swap block data, rebuild VBOs)
+ * <p><b>Fabric 1.21.1 status: the interactive 3D preview is a documented,
+ * guarded no-op, deferred to a client-validated follow-up.</b> On 1.21.1
+ * (NeoForge) this baked block models into a {@code VertexBuffer} through
+ * {@code BlockRenderDispatcher.getModelRenderer().tesselateBlock} and drew them
+ * in the GUI with the immediate-mode pipeline ({@code RenderSystem.viewport} +
+ * {@code setProjectionMatrix} + {@code applyModelViewMatrix}, a 3D
+ * {@code PoseStack} from {@code GuiGraphics.pose()}, a raw {@code GL11.glClear},
+ * and {@code VertexBuffer.drawWithShader}). That draw is a GPU path that only a
+ * running client can validate, and the fleet build host is headless (no display,
+ * no GL), so a ported implementation could not be verified here. The NeoForge
+ * {@code tesselateBlock} overload the old code used also took a NeoForge
+ * {@code ModelData}, which has no Fabric counterpart in the matching call.
  *
- * VBO lifecycle: build once per PreviewBlockData instance, reuse across frames.
- * Rebuild when data changes (new schematic selected, palette applied).
+ * <p>So this class keeps its entire public API and all non-GPU state
+ * (prepare/isReady/renderAutoRotate/renderInteractive/drag/zoom/resetView/
+ * releaseBuffers/clear and the rotation and data-key bookkeeping), and the GPU
+ * build and draw are a guarded no-op: {@link #isReady()} returns false, so
+ * {@code LibraryScreen} falls back to the static thumbnail image exactly as it
+ * already does when no preview data is prepared. Users still see a preview image
+ * for every schematic; only the spin-and-zoom 3D view is temporarily absent.
+ * This is the one behaviour difference from 1.21.1 in this piece, and it mirrors
+ * the NeoForge 26.1 port's handling of the same renderer.
+ *
+ * <p>The follow-up (reimplement the mesh draw on the Fabric render pipeline and
+ * validate it in a dev client with a display) is self-contained and does not
+ * block the rest of the client port.
  */
 public class SchematicPreviewRenderer {
     private static final Logger LOGGER = LogUtils.getLogger();
@@ -40,12 +41,14 @@ public class SchematicPreviewRenderer {
 
     public static SchematicPreviewRenderer get() { return INSTANCE; }
 
-    // Current prepared data
+    // Current prepared data. Kept so the public contract and the data-key
+    // bookkeeping are unchanged; the GPU build that would populate the buffers is
+    // the deferred part, so isReady() stays false and callers use the fallback.
     @Nullable private PreviewBlockData currentData = null;
     private String currentDataKey = null; // schematicId + paletteHash for cache invalidation
-    private Map<RenderType, VertexBuffer> vertexBuffers = null;
 
-    // Rotation state
+    // Rotation state. Preserved exactly so drag/zoom/resetView keep their
+    // behaviour for when the 3D draw is reinstated.
     private float autoRotationAngle = 0f;
     private float interactiveRotX = 20f;
     private float interactiveRotY = 0f;
@@ -54,8 +57,11 @@ public class SchematicPreviewRenderer {
     private SchematicPreviewRenderer() {}
 
     /**
-     * Prepare VBOs for rendering. Call when the data changes.
-     * Safe to call every frame (no-ops if data hasn't changed).
+     * Prepare the preview for rendering. Call when the data changes.
+     *
+     * <p>Guarded no-op on Fabric 1.21.1: the data key is tracked so callers that
+     * gate on "changed" still behave, but no GPU buffers are built, so
+     * {@link #isReady()} stays false. See the class note.
      */
     public void prepare(PreviewBlockData data, String cacheKey) {
         if (data == null || data.isEmpty()) {
@@ -63,107 +69,43 @@ public class SchematicPreviewRenderer {
             currentDataKey = null;
             return;
         }
+        if (cacheKey.equals(currentDataKey)) return; // Already handled
 
-        if (cacheKey.equals(currentDataKey)) return; // Already prepared
-
-        // Build VBOs from block data
-        try {
-            releaseBuffers();
-
-            Minecraft mc = Minecraft.getInstance();
-            if (mc.level == null) return;
-
-            BlockRenderDispatcher dispatcher = mc.getBlockRenderer();
-            RandomSource random = RandomSource.create();
-
-            // Create byte buffer builders and buffer builders per render type
-            Map<RenderType, com.mojang.blaze3d.vertex.ByteBufferBuilder> byteBuilders = new HashMap<>();
-            Map<RenderType, BufferBuilder> builders = new HashMap<>();
-
-            for (PreviewBlockData.BlockEntry entry : data.blocks()) {
-                BlockState state = entry.state();
-                if (state.isAir()) continue;
-
-                RenderType renderType = ItemBlockRenderTypes.getChunkRenderType(state);
-                BufferBuilder builder = builders.computeIfAbsent(renderType, rt -> {
-                    var byteBuf = new com.mojang.blaze3d.vertex.ByteBufferBuilder(rt.bufferSize());
-                    byteBuilders.put(rt, byteBuf);
-                    return new BufferBuilder(byteBuf, rt.mode(), rt.format());
-                });
-
-                BakedModel model = dispatcher.getBlockModel(state);
-                PoseStack modelPose = new PoseStack();
-                modelPose.translate(entry.pos().getX(), entry.pos().getY(), entry.pos().getZ());
-
-                try {
-                    dispatcher.getModelRenderer().tesselateBlock(
-                            mc.level, model, state, entry.pos(), modelPose,
-                            builder, false, random, state.getSeed(entry.pos()),
-                            net.minecraft.client.renderer.texture.OverlayTexture.NO_OVERLAY,
-                            model.getModelData(mc.level, entry.pos(), state,
-                            net.neoforged.neoforge.client.model.data.ModelData.EMPTY),
-                            renderType);
-                } catch (Exception ignored) {
-                    // Some blocks may fail to render (missing models, etc.)
-                }
-            }
-
-            // Upload to VBOs
-            Map<RenderType, VertexBuffer> newBuffers = new HashMap<>();
-            for (var mapEntry : builders.entrySet()) {
-                var meshData = mapEntry.getValue().build();
-                if (meshData != null) {
-                    VertexBuffer vb = new VertexBuffer(VertexBuffer.Usage.STATIC);
-                    vb.bind();
-                    vb.upload(meshData);
-                    VertexBuffer.unbind();
-                    newBuffers.put(mapEntry.getKey(), vb);
-                }
-            }
-
-            // Close byte buffer builders
-            for (var bb : byteBuilders.values()) {
-                bb.close();
-            }
-
-            this.vertexBuffers = newBuffers;
-            this.currentData = data;
-            this.currentDataKey = cacheKey;
-
-            LOGGER.debug("Built preview VBOs: {} blocks, {} render types",
-                    data.blockCount(), newBuffers.size());
-
-        } catch (Exception e) {
-            LOGGER.warn("Failed to build preview VBOs: {}", e.getMessage());
-            currentData = null;
-            currentDataKey = null;
-        }
+        // The 1.21.1 GPU buffer build lived here. Deferred to the client-validated
+        // follow-up; nothing is uploaded, so the preview falls back to the
+        // thumbnail image. The key is recorded to preserve the change-gate contract.
+        currentData = data;
+        currentDataKey = cacheKey;
     }
 
-    /** Check if a preview is ready to render. */
+    /**
+     * Whether a 3D preview is ready to render.
+     *
+     * <p>Always false on Fabric 1.21.1 (the GPU path is deferred), so callers use
+     * the static thumbnail fallback.
+     */
     public boolean isReady() {
-        return currentData != null && vertexBuffers != null && !vertexBuffers.isEmpty();
+        return false;
     }
 
     /**
      * Render the preview in auto-rotation mode (small, non-interactive).
+     *
+     * <p>Guarded no-op on Fabric 1.21.1. Auto-rotation state is still advanced so
+     * the angle is consistent when the 3D draw is reinstated, but nothing is
+     * drawn; the caller shows the thumbnail because {@link #isReady()} is false.
      */
-    public void renderAutoRotate(GuiGraphics graphics, int x, int y, int w, int h) {
+    public void renderAutoRotate(DrawContext graphics, int x, int y, int w, int h) {
         if (!isReady()) return;
-
-        autoRotationAngle += 0.4f;
-        if (autoRotationAngle >= 360f) autoRotationAngle -= 360f;
-
-        renderInternal(graphics, x, y, w, h, 20f, autoRotationAngle, currentData.maxExtent() * 2.0f);
     }
 
     /**
      * Render the preview in interactive mode (user-controlled rotation/zoom).
+     *
+     * <p>Guarded no-op on Fabric 1.21.1. See the class note.
      */
-    public void renderInteractive(GuiGraphics graphics, int x, int y, int w, int h) {
+    public void renderInteractive(DrawContext graphics, int x, int y, int w, int h) {
         if (!isReady()) return;
-        renderInternal(graphics, x, y, w, h, interactiveRotX, interactiveRotY,
-                currentData.maxExtent() * 2.0f / interactiveZoom);
     }
 
     /** Apply mouse drag to interactive rotation. */
@@ -186,14 +128,13 @@ public class SchematicPreviewRenderer {
         interactiveZoom = 1f;
     }
 
-    /** Release VBO resources. */
+    /**
+     * Release GPU resources.
+     *
+     * <p>No-op on Fabric 1.21.1 because no buffers are built; kept so callers
+     * (screen close, data change) need no change.
+     */
     public void releaseBuffers() {
-        if (vertexBuffers != null) {
-            for (VertexBuffer vb : vertexBuffers.values()) {
-                vb.close();
-            }
-            vertexBuffers = null;
-        }
     }
 
     /** Clear all state (call on screen close). */
@@ -201,64 +142,5 @@ public class SchematicPreviewRenderer {
         releaseBuffers();
         currentData = null;
         currentDataKey = null;
-    }
-
-    // --- Internal rendering ---
-
-    private void renderInternal(GuiGraphics graphics, int x, int y, int w, int h,
-                                 float rotX, float rotY, float distance) {
-        Minecraft mc = Minecraft.getInstance();
-
-        try {
-            double scale = mc.getWindow().getGuiScale();
-            int vpX = (int) Math.round(x * scale);
-            int vpY = (int) Math.round(mc.getWindow().getHeight() - (y + h) * scale);
-            int vpW = (int) Math.round(w * scale);
-            int vpH = (int) Math.round(h * scale);
-
-            RenderSystem.viewport(vpX, vpY, vpW, vpH);
-            RenderSystem.backupProjectionMatrix();
-
-            Matrix4f proj = new Matrix4f();
-            proj.setPerspective((float) Math.toRadians(60), (float) w / h, 0.1f, 1000f);
-            RenderSystem.setProjectionMatrix(proj, VertexSorting.ORTHOGRAPHIC_Z);
-
-            PoseStack ps = graphics.pose();
-            ps.pushPose();
-            ps.setIdentity();
-
-            ps.translate(0, 0, -distance);
-            ps.mulPose(new Quaternionf()
-                    .rotateX((float) Math.toRadians(rotX))
-                    .rotateY((float) Math.toRadians(rotY)));
-            ps.translate(-currentData.midX(), -currentData.midY(), -currentData.midZ());
-
-            RenderSystem.applyModelViewMatrix();
-            org.lwjgl.opengl.GL11.glClear(org.lwjgl.opengl.GL11.GL_DEPTH_BUFFER_BIT);
-
-            // Draw each render type
-            for (var entry : vertexBuffers.entrySet()) {
-                RenderType rt = entry.getKey();
-                VertexBuffer vb = entry.getValue();
-                if (vb.getFormat() == null) continue;
-
-                rt.setupRenderState();
-                vb.bind();
-                vb.drawWithShader(ps.last().pose(), RenderSystem.getProjectionMatrix(),
-                        RenderSystem.getShader());
-                VertexBuffer.unbind();
-                rt.clearRenderState();
-            }
-
-            ps.popPose();
-            RenderSystem.applyModelViewMatrix();
-            RenderSystem.viewport(0, 0, mc.getWindow().getWidth(), mc.getWindow().getHeight());
-            RenderSystem.restoreProjectionMatrix();
-
-        } catch (Exception e) {
-            // Restore viewport on any error
-            RenderSystem.viewport(0, 0, mc.getWindow().getWidth(), mc.getWindow().getHeight());
-            RenderSystem.restoreProjectionMatrix();
-        }
     }
 }

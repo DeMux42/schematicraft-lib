@@ -4,12 +4,12 @@ import com.mojang.logging.LogUtils;
 import com.schematicraft.lib.client.CameraMode;
 import com.schematicraft.lib.core.LibraryState;
 import com.schematicraft.lib.network.SchematiCraftAPIWrapper;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.client.gui.components.Button;
-import net.minecraft.client.gui.components.EditBox;
-import net.minecraft.client.gui.screens.Screen;
-import net.minecraft.network.chat.Component;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.gui.DrawContext;
+import net.minecraft.client.gui.widget.ButtonWidget;
+import net.minecraft.client.gui.widget.TextFieldWidget;
+import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.text.Text;
 import org.lwjgl.glfw.GLFW;
 import org.slf4j.Logger;
 
@@ -38,11 +38,11 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
     private int bundleIndex = 0;
     private final List<Path> images = new ArrayList<>();
 
-    private EditBox titleField;
-    private EditBox descField;
-    private Button candidateButton;
-    private Button bundleButton;
-    private Button saveButton;
+    private TextFieldWidget titleField;
+    private TextFieldWidget descField;
+    private ButtonWidget candidateButton;
+    private ButtonWidget bundleButton;
+    private ButtonWidget saveButton;
 
     private String statusText = "";
     private int statusColor = GuiColors.TEXT_DIM;
@@ -65,7 +65,7 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
     private static int pendingBundleIndex = 0;
 
     public UploadScreen(UploadSource source, EditorJourney journey) {
-        super(Component.literal("Upload Build"));
+        super(Text.literal("Upload Build"));
         this.source = source;
         this.journey = journey;
         this.candidates = new ArrayList<>(source.listCandidates());
@@ -88,47 +88,47 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
         int x = centerX - FIELD_W / 2;
         int y = 50;
 
-        titleField = new EditBox(this.font, x, y, FIELD_W, 18, Component.literal(""));
+        titleField = new TextFieldWidget(this.textRenderer, x, y, FIELD_W, 18, Text.literal(""));
         titleField.setMaxLength(200);
-        titleField.setHint(Component.literal("Title (required)"));
+        titleField.setPlaceholder(Text.literal("Title (required)"));
         if (pendingTitle != null) {
-            titleField.setValue(pendingTitle);
+            titleField.setText(pendingTitle);
             pendingTitle = null;
         } else if (!candidates.isEmpty()) {
-            titleField.setValue("");
+            titleField.setText("");
         }
-        this.addRenderableWidget(titleField);
+        this.addDrawableChild(titleField);
         this.setInitialFocus(titleField);
         y += ROW_H;
 
-        descField = new EditBox(this.font, x, y, FIELD_W, 18, Component.literal(""));
+        descField = new TextFieldWidget(this.textRenderer, x, y, FIELD_W, 18, Text.literal(""));
         descField.setMaxLength(500);
-        descField.setHint(Component.literal("Description (optional)"));
+        descField.setPlaceholder(Text.literal("Description (optional)"));
         if (pendingDesc != null) {
-            descField.setValue(pendingDesc);
+            descField.setText(pendingDesc);
             pendingDesc = null;
         }
-        this.addRenderableWidget(descField);
+        this.addDrawableChild(descField);
         y += ROW_H + 4;
 
         // Which build to upload
-        candidateButton = Button.builder(Component.literal(candidateLabel()),
+        candidateButton = ButtonWidget.builder(Text.literal(candidateLabel()),
                 b -> {
                     if (candidates.size() > 1) {
                         candidateIndex = (candidateIndex + 1) % candidates.size();
-                        b.setMessage(Component.literal(candidateLabel()));
+                        b.setMessage(Text.literal(candidateLabel()));
                     }
                 })
-                .bounds(x, y, FIELD_W, 18).build();
+                .dimensions(x, y, FIELD_W, 18).build();
         candidateButton.active = candidates.size() > 1;
-        this.addRenderableWidget(candidateButton);
+        this.addDrawableChild(candidateButton);
         y += ROW_H;
 
         // Bundle selector, opens a plain dropdown list
-        bundleButton = Button.builder(Component.literal(bundleLabel() + " \u25be"),
+        bundleButton = ButtonWidget.builder(Text.literal(bundleLabel() + " \u25be"),
                 b -> setDropdownOpen(!dropdownOpen))
-                .bounds(x, y, FIELD_W, 18).build();
-        this.addRenderableWidget(bundleButton);
+                .dimensions(x, y, FIELD_W, 18).build();
+        this.addDrawableChild(bundleButton);
         dropdownX = x;
         dropdownY = y + 18;
         y += ROW_H;
@@ -137,18 +137,18 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
         String camLabel = images.isEmpty()
                 ? "Take screenshots"
                 : images.size() + (images.size() == 1 ? " screenshot" : " screenshots");
-        this.addRenderableWidget(Button.builder(Component.literal(camLabel),
+        this.addDrawableChild(ButtonWidget.builder(Text.literal(camLabel),
                 b -> enterCameraMode())
-                .bounds(x, y, FIELD_W, 18).build());
+                .dimensions(x, y, FIELD_W, 18).build());
         y += ROW_H + 6;
 
-        saveButton = Button.builder(Component.literal("Upload"), b -> doUpload())
-                .bounds(x, y, FIELD_W / 2 - 2, 20).build();
-        this.addRenderableWidget(saveButton);
+        saveButton = ButtonWidget.builder(Text.literal("Upload"), b -> doUpload())
+                .dimensions(x, y, FIELD_W / 2 - 2, 20).build();
+        this.addDrawableChild(saveButton);
 
-        this.addRenderableWidget(Button.builder(Component.literal("Cancel"),
-                b -> Minecraft.getInstance().setScreen(new LibraryScreen(journey)))
-                .bounds(x + FIELD_W / 2 + 2, y, FIELD_W / 2 - 2, 20).build());
+        this.addDrawableChild(ButtonWidget.builder(Text.literal("Cancel"),
+                b -> MinecraftClient.getInstance().setScreen(new LibraryScreen(journey)))
+                .dimensions(x + FIELD_W / 2 + 2, y, FIELD_W / 2 - 2, 20).build());
 
         if (candidates.isEmpty()) {
             saveButton.active = false;
@@ -177,15 +177,15 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
     private void enterCameraMode() {
         pendingReopen = true;
         pendingImages = new ArrayList<>(images);
-        pendingTitle = titleField.getValue();
-        pendingDesc = descField.getValue();
+        pendingTitle = titleField.getText();
+        pendingDesc = descField.getText();
         pendingCandidateIndex = candidateIndex;
         pendingBundleIndex = bundleIndex;
 
-        this.minecraft.setScreen(null);
+        this.client.setScreen(null);
         CameraMode.start(pendingImages, () ->
-                Minecraft.getInstance().execute(() ->
-                        Minecraft.getInstance().setScreen(new UploadScreen(source, journey))));
+                MinecraftClient.getInstance().execute(() ->
+                        MinecraftClient.getInstance().setScreen(new UploadScreen(source, journey))));
     }
 
     private void doUpload() {
@@ -194,7 +194,7 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
         if (dropdownOpen) return;
         if (uploading || candidates.isEmpty()) return;
 
-        String title = titleField.getValue().trim();
+        String title = titleField.getText().trim();
         if (title.isEmpty()) {
             statusText = "Title required";
             statusColor = GuiColors.ERROR;
@@ -210,8 +210,8 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
         statusColor = GuiColors.INFO;
 
         source.upload(candidates.get(candidateIndex).id(), title,
-                        descField.getValue().trim(), bundleId, new ArrayList<>(images))
-                .thenAccept(isDuplicate -> Minecraft.getInstance().execute(() -> {
+                        descField.getText().trim(), bundleId, new ArrayList<>(images))
+                .thenAccept(isDuplicate -> MinecraftClient.getInstance().execute(() -> {
                     uploading = false;
 
                     // Done, so leave the form and report the outcome on the library
@@ -228,10 +228,10 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
                     clearPendingState();
 
                     SchematiCraftAPIWrapper.get().refreshLibrary();
-                    Minecraft.getInstance().setScreen(new LibraryScreen(journey));
+                    MinecraftClient.getInstance().setScreen(new LibraryScreen(journey));
                 }))
                 .exceptionally(ex -> {
-                    Minecraft.getInstance().execute(() -> {
+                    MinecraftClient.getInstance().execute(() -> {
                         uploading = false;
                         saveButton.active = true;
                         statusText = "Upload failed: " + SchematiCraftAPIWrapper.rootMessage(ex);
@@ -243,20 +243,20 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
     }
 
     @Override
-    public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+    public void render(DrawContext graphics, int mouseX, int mouseY, float partialTick) {
         graphics.fill(0, 0, this.width, this.height, GuiColors.SCREEN_BG);
 
         graphics.fill(0, 0, this.width, 30, GuiColors.PANEL_BG);
         graphics.fill(0, 29, this.width, 30, GuiColors.BORDER_SEPARATOR);
-        graphics.drawString(this.font, "Upload from " + source.displayName(), 8, 6,
+        graphics.drawText(this.textRenderer, "Upload from " + source.displayName(), 8, 6,
                 GuiColors.SELECTED, false);
-        graphics.drawString(this.font, "Shared publicly only if you choose to on the website",
+        graphics.drawText(this.textRenderer, "Shared publicly only if you choose to on the website",
                 8, 18, GuiColors.TEXT_DIM, false);
 
         super.render(graphics, mouseX, mouseY, partialTick);
 
         if (!statusText.isEmpty()) {
-            graphics.drawCenteredString(this.font, statusText,
+            graphics.drawCenteredTextWithShadow(this.textRenderer, statusText,
                     this.width / 2, this.height - 30, statusColor);
         }
 
@@ -278,7 +278,7 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
         dropdownOpen = open;
         if (!open) dropdownScroll = 0;
         for (var child : this.children()) {
-            if (child instanceof Button b && b != bundleButton) {
+            if (child instanceof ButtonWidget b && b != bundleButton) {
                 b.active = !open;
             }
         }
@@ -302,7 +302,7 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
         return rows;
     }
 
-    private void renderDropdown(GuiGraphics graphics, int mouseX, int mouseY) {
+    private void renderDropdown(DrawContext graphics, int mouseX, int mouseY) {
         if (!dropdownOpen) return;
 
         List<String> rows = dropdownRows();
@@ -313,9 +313,9 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
         // drawn earlier would otherwise appear on top of this panel even though it
         // is drawn later. Flush the pending text, then raise the Z layer so both
         // the panel and its own text sit above the form.
-        graphics.flush();
-        graphics.pose().pushPose();
-        graphics.pose().translate(0, 0, 300);
+        graphics.draw();
+        graphics.getMatrices().push();
+        graphics.getMatrices().translate(0, 0, 300);
 
         // Opaque so the form behind it does not bleed through the list.
         graphics.fill(dropdownX, dropdownY, dropdownX + FIELD_W, dropdownY + h,
@@ -338,26 +338,26 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
 
             int color = isCreateRow ? GuiColors.INFO
                     : (isSelected ? GuiColors.SELECTED : GuiColors.TEXT_PRIMARY);
-            graphics.drawString(this.font, rows.get(rowIdx),
+            graphics.drawText(this.textRenderer, rows.get(rowIdx),
                     dropdownX + 4, rowY + 3, color, false);
         }
 
         if (rows.size() > DROP_MAX_ROWS) {
-            graphics.drawString(this.font, "\u00a78scroll",
+            graphics.drawText(this.textRenderer, "\u00a78scroll",
                     dropdownX + FIELD_W - 30, dropdownY + h - 10, GuiColors.TEXT_DIM, false);
         }
 
         // Flush while still translated so this panel's text lands on the raised
         // layer rather than being deferred back down to the default one.
-        graphics.flush();
-        graphics.pose().popPose();
+        graphics.draw();
+        graphics.getMatrices().pop();
     }
 
     private static boolean isOver(int mouseX, int mouseY, int x, int y, int w, int h) {
         return mouseX >= x && mouseX < x + w && mouseY >= y && mouseY < y + h;
     }
 
-    private static void drawBorder(GuiGraphics graphics, int x, int y, int w, int h, int color) {
+    private static void drawBorder(DrawContext graphics, int x, int y, int w, int h, int color) {
         graphics.fill(x, y, x + w, y + 1, color);
         graphics.fill(x, y + h - 1, x + w, y + h, color);
         graphics.fill(x, y, x + 1, y + h, color);
@@ -382,7 +382,7 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
                         openNewBundle();
                     } else {
                         bundleIndex = rowIdx;
-                        bundleButton.setMessage(Component.literal(bundleLabel() + " \u25be"));
+                        bundleButton.setMessage(Text.literal(bundleLabel() + " \u25be"));
                     }
                     return true;
                 }
@@ -413,12 +413,12 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
     private void openNewBundle() {
         pendingReopen = true;
         pendingImages = new ArrayList<>(images);
-        pendingTitle = titleField.getValue();
-        pendingDesc = descField.getValue();
+        pendingTitle = titleField.getText();
+        pendingDesc = descField.getText();
         pendingCandidateIndex = candidateIndex;
         pendingBundleIndex = bundleIndex;
 
-        Minecraft.getInstance().setScreen(new NewBundleScreen(new UploadScreen(source, journey), id -> {
+        MinecraftClient.getInstance().setScreen(new NewBundleScreen(new UploadScreen(source, journey), id -> {
             // Select the freshly created bundle by id once the library refreshes.
             List<LibraryState.BundleOption> opts = LibraryState.get().getBundleOptions();
             for (int i = 0; i < opts.size(); i++) {
@@ -431,14 +431,14 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
     }
 
     @Override
-    public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+    public void renderBackground(DrawContext graphics, int mouseX, int mouseY, float partialTick) {
         // Skip default
     }
 
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
         if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
-            Minecraft.getInstance().setScreen(new LibraryScreen(journey));
+            MinecraftClient.getInstance().setScreen(new LibraryScreen(journey));
             return true;
         }
         // Enter in the title field submits
@@ -451,7 +451,7 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
     }
 
     @Override
-    public boolean isPauseScreen() { return false; }
+    public boolean shouldPause() { return false; }
 
     /** Clear camera round-trip state, e.g. on world exit. */
     public static void clearPendingState() {

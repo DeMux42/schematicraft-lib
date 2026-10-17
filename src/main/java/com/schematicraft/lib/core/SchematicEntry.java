@@ -1,6 +1,6 @@
 package com.schematicraft.lib.core;
 
-import javax.annotation.Nullable;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * Portable schematic metadata. No MC dependencies.

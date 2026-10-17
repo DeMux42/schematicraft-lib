@@ -19,6 +19,8 @@ public class SchematiCraftLib {
         initialized = true;
         LOGGER.info("Schematicraft Lib initializing");
         ModConfig.init();
-        com.schematicraft.lib.client.CameraMode.registerEvents();
+        // CameraMode overlay and input handlers are wired by the loader
+        // integration (Fabric HudRenderCallback plus client input callbacks), not
+        // here, so the editor-agnostic library registers no loader events.
     }
 }

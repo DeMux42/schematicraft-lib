@@ -189,10 +189,10 @@ public class SchematiCraftAPIWrapper {
     }
 
     /** The game's own release, or null for a snapshot or a renamed build. */
-    @javax.annotation.Nullable
+    @org.jetbrains.annotations.Nullable
     private static String gameRelease() {
         return IngameDownload.release(
-                net.minecraft.SharedConstants.getCurrentVersion().getName());
+                net.minecraft.SharedConstants.getGameVersion().getName());
     }
 
     /**
@@ -201,7 +201,7 @@ public class SchematiCraftAPIWrapper {
      */
     private CompletableFuture<SchematiCraftAPI.DownloadResult> download(
             String schematicId, String format, String targetEditor,
-            @javax.annotation.Nullable String paletteId, boolean confirm) {
+            @org.jetbrains.annotations.Nullable String paletteId, boolean confirm) {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 requireDownloadTarget(format, targetEditor);

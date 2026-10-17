@@ -1,11 +1,11 @@
 package com.schematicraft.lib.client.gui;
 
-import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.resources.ResourceLocation;
-import net.minecraft.world.item.Item;
-import net.minecraft.world.item.ItemStack;
+import net.minecraft.registry.Registries;
+import net.minecraft.util.Identifier;
+import net.minecraft.item.Item;
+import net.minecraft.item.ItemStack;
 
-import javax.annotation.Nullable;
+import org.jetbrains.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -63,9 +63,9 @@ public final class TargetCatalog {
         }
 
         public ItemStack icon() {
-            ResourceLocation id = ResourceLocation.tryParse(itemId);
+            Identifier id = Identifier.tryParse(itemId);
             if (id == null) return ItemStack.EMPTY;
-            Item item = BuiltInRegistries.ITEM.get(id);
+            Item item = Registries.ITEM.get(id);
             return item == null ? ItemStack.EMPTY : new ItemStack(item);
         }
 

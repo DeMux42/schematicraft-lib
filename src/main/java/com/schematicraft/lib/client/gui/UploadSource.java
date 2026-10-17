@@ -1,8 +1,8 @@
 package com.schematicraft.lib.client.gui;
 
-import net.minecraft.world.item.ItemStack;
+import net.minecraft.item.ItemStack;
 
-import javax.annotation.Nullable;
+import org.jetbrains.annotations.Nullable;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
