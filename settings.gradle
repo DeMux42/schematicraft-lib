@@ -1,8 +1,16 @@
 pluginManagement {
     repositories {
-        mavenLocal()
+        // mavenLocal() is intentionally absent. Build plugins execute code, so
+        // resolving them from a mutable local cache first is a supply-chain risk.
         gradlePluginPortal()
-        maven { url = 'https://maven.neoforged.net/releases' }
+        maven {
+            name = 'MinecraftForge'
+            url = 'https://maven.minecraftforge.net/'
+        }
+        maven {
+            name = 'ParchmentMC'
+            url = 'https://maven.parchmentmc.org'
+        }
     }
 }
 

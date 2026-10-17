@@ -76,8 +76,9 @@ public class SchematicPreviewRenderer {
             BlockRenderDispatcher dispatcher = mc.getBlockRenderer();
             RandomSource random = RandomSource.create();
 
-            // Create byte buffer builders and buffer builders per render type
-            Map<RenderType, com.mojang.blaze3d.vertex.ByteBufferBuilder> byteBuilders = new HashMap<>();
+            // One BufferBuilder per render type. On 1.20.1 a BufferBuilder owns its
+            // own backing buffer (sized in bytes) and is drained with end(); there is
+            // no separate ByteBufferBuilder as there is on 1.21.
             Map<RenderType, BufferBuilder> builders = new HashMap<>();
 
             for (PreviewBlockData.BlockEntry entry : data.blocks()) {
@@ -86,9 +87,9 @@ public class SchematicPreviewRenderer {
 
                 RenderType renderType = ItemBlockRenderTypes.getChunkRenderType(state);
                 BufferBuilder builder = builders.computeIfAbsent(renderType, rt -> {
-                    var byteBuf = new com.mojang.blaze3d.vertex.ByteBufferBuilder(rt.bufferSize());
-                    byteBuilders.put(rt, byteBuf);
-                    return new BufferBuilder(byteBuf, rt.mode(), rt.format());
+                    BufferBuilder b = new BufferBuilder(rt.bufferSize());
+                    b.begin(rt.mode(), rt.format());
+                    return b;
                 });
 
                 BakedModel model = dispatcher.getBlockModel(state);
@@ -101,29 +102,26 @@ public class SchematicPreviewRenderer {
                             builder, false, random, state.getSeed(entry.pos()),
                             net.minecraft.client.renderer.texture.OverlayTexture.NO_OVERLAY,
                             model.getModelData(mc.level, entry.pos(), state,
-                            net.neoforged.neoforge.client.model.data.ModelData.EMPTY),
+                            net.minecraftforge.client.model.data.ModelData.EMPTY),
                             renderType);
                 } catch (Exception ignored) {
                     // Some blocks may fail to render (missing models, etc.)
                 }
             }
 
-            // Upload to VBOs
+            // Drain each builder and upload to a VBO.
             Map<RenderType, VertexBuffer> newBuffers = new HashMap<>();
             for (var mapEntry : builders.entrySet()) {
-                var meshData = mapEntry.getValue().build();
-                if (meshData != null) {
+                BufferBuilder.RenderedBuffer rendered = mapEntry.getValue().end();
+                if (rendered != null && !rendered.isEmpty()) {
                     VertexBuffer vb = new VertexBuffer(VertexBuffer.Usage.STATIC);
                     vb.bind();
-                    vb.upload(meshData);
+                    vb.upload(rendered);
                     VertexBuffer.unbind();
                     newBuffers.put(mapEntry.getKey(), vb);
+                } else if (rendered != null) {
+                    rendered.release();
                 }
-            }
-
-            // Close byte buffer builders
-            for (var bb : byteBuilders.values()) {
-                bb.close();
             }
 
             this.vertexBuffers = newBuffers;
