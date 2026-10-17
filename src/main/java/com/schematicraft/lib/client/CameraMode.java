@@ -1,14 +1,12 @@
 package com.schematicraft.lib.client;
 
-import com.mojang.blaze3d.pipeline.RenderTarget;
-import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.logging.LogUtils;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.Font;
-import net.minecraft.client.gui.GuiGraphics;
-import net.neoforged.neoforge.client.event.InputEvent;
-import net.neoforged.neoforge.client.event.RenderGuiLayerEvent;
-import net.neoforged.neoforge.common.NeoForge;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.font.TextRenderer;
+import net.minecraft.client.gl.Framebuffer;
+import net.minecraft.client.gui.DrawContext;
+import net.minecraft.client.texture.NativeImage;
+import net.minecraft.client.util.ScreenshotRecorder;
 import org.slf4j.Logger;
 
 import java.nio.file.Files;
@@ -17,14 +15,16 @@ import java.util.List;
 
 /**
  * In-game screenshot capture mode with overlay, debounce, and image cap.
- * Event handlers are registered manually via registerEvents() rather than
- * annotation-based, so the lib works regardless of which mod ID it's compiled into.
+ *
+ * The three handlers (overlay draw, mouse click, key press) are plain methods
+ * the loader integration subscribes to its own events. On Fabric the mod wires
+ * renderOverlay to HudRenderCallback and onMouseClick/onKeyInput to the client
+ * input callbacks; on NeoForge the equivalents are the event bus. Keeping the
+ * handlers loader-neutral is why this lives in the editor-agnostic library.
  */
 public class CameraMode {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static boolean eventsRegistered = false;
     private static final int ESC_KEY = 256;
-    private static final int CAPTURE_COOLDOWN_TICKS = 20; // 1 second at 20 TPS
     private static final int FLASH_DURATION_TICKS = 15; // ~0.75 seconds
     /**
      * Must match the server upload contract. The In-Game upload endpoint accepts
@@ -44,15 +44,6 @@ public class CameraMode {
     private static long lastCaptureTimeMs = 0; // Debounce based on wall clock, not ticks
     private static final long CAPTURE_COOLDOWN_MS = 1000; // 1 second
 
-    public static void registerEvents() {
-        if (eventsRegistered) return;
-        eventsRegistered = true;
-        NeoForge.EVENT_BUS.addListener(CameraMode::onRenderGuiLayer);
-        NeoForge.EVENT_BUS.addListener(CameraMode::onMouseClick);
-        NeoForge.EVENT_BUS.addListener(CameraMode::onKeyInput);
-        LOGGER.info("CameraMode events registered");
-    }
-
     public static void start(List<Path> images, Runnable finished) {
         if (active) return;
         active = true;
@@ -62,16 +53,16 @@ public class CameraMode {
         lastCaptureTimeMs = 0;
         tickCounter = 0;
 
-        Minecraft mc = Minecraft.getInstance();
-        wasHudHidden = mc.options.hideGui;
-        mc.options.hideGui = true;
+        MinecraftClient mc = MinecraftClient.getInstance();
+        wasHudHidden = mc.options.hudHidden;
+        mc.options.hudHidden = true;
     }
 
     public static void stop() {
         if (!active) return;
         active = false;
 
-        Minecraft.getInstance().options.hideGui = wasHudHidden;
+        MinecraftClient.getInstance().options.hudHidden = wasHudHidden;
         LOGGER.info("Camera mode finished with {} screenshots", capturedImages.size());
 
         Runnable callback = onFinished;
@@ -86,7 +77,11 @@ public class CameraMode {
 
     public static boolean isActive() { return active; }
 
-    public static void onRenderGuiLayer(RenderGuiLayerEvent.Post event) {
+    /**
+     * Draw the capture overlay. The loader subscribes this to its HUD render
+     * callback (Fabric HudRenderCallback). Behaviour is unchanged from 1.21.1.
+     */
+    public static void renderOverlay(DrawContext g) {
         if (!active) return;
 
         // When a capture is pending, skip drawing the overlay so the framebuffer is clean,
@@ -102,11 +97,10 @@ public class CameraMode {
 
         boolean inCooldown = (System.currentTimeMillis() - lastCaptureTimeMs) < CAPTURE_COOLDOWN_MS;
 
-        Minecraft mc = Minecraft.getInstance();
-        GuiGraphics g = event.getGuiGraphics();
-        Font font = mc.font;
-        int w = mc.getWindow().getGuiScaledWidth();
-        int h = mc.getWindow().getGuiScaledHeight();
+        MinecraftClient mc = MinecraftClient.getInstance();
+        TextRenderer font = mc.textRenderer;
+        int w = mc.getWindow().getScaledWidth();
+        int h = mc.getWindow().getScaledHeight();
 
         // Camera border
         int bc = 0x40FFFFFF;
@@ -135,7 +129,7 @@ public class CameraMode {
 
             // "Captured!" text during flash
             if (flashTimer > FLASH_DURATION_TICKS / 2) {
-                g.drawCenteredString(font, "\u00a7aCaptured!", w / 2, h / 2 - 4, 0xFFFFFF);
+                g.drawCenteredTextWithShadow(font, "\u00a7aCaptured!", w / 2, h / 2 - 4, 0xFFFFFF);
             }
         }
 
@@ -151,58 +145,66 @@ public class CameraMode {
         } else {
             msg = "\u00a7a" + captureCount + "/" + MAX_IMAGES + "  \u00a78|\u00a77  Click for more  \u00a78|\u00a77  Esc to finish";
         }
-        g.drawCenteredString(font, msg, w / 2, h - 18, 0xFFFFFF);
+        g.drawCenteredTextWithShadow(font, msg, w / 2, h - 18, 0xFFFFFF);
 
         // Count badge
         if (captureCount > 0) {
             String badge = "\u00a7a\u2713 " + captureCount;
-            int bw = font.width(badge) + 8;
+            int bw = font.getWidth(badge) + 8;
             g.fill(w - bw - 4, 4, w - 4, 18, 0x80000000);
-            g.drawString(font, badge, w - bw, 6, 0xFFFFFF);
+            g.drawTextWithShadow(font, badge, w - bw, 6, 0xFFFFFF);
         }
     }
 
-    public static void onMouseClick(InputEvent.MouseButton.Pre event) {
-        if (!active) return;
-        if (event.getButton() != 0 || event.getAction() != 1) return;
+    /**
+     * Left-click handler. The loader subscribes this to its client mouse input.
+     * Returns true when the click was consumed (while active), so the loader can
+     * cancel the click. button 0 is left; action 1 is press.
+     */
+    public static boolean onMouseClick(int button, int action) {
+        if (!active) return false;
+        if (button != 0 || action != 1) return false;
 
-        event.setCanceled(true);
-
-        if ((System.currentTimeMillis() - lastCaptureTimeMs) < CAPTURE_COOLDOWN_MS) return;
-        if (pendingCapture) return;
-        if (captureCount >= MAX_IMAGES) return;
+        // Consume the click while active even if it does not schedule a capture.
+        if ((System.currentTimeMillis() - lastCaptureTimeMs) < CAPTURE_COOLDOWN_MS) return true;
+        if (pendingCapture) return true;
+        if (captureCount >= MAX_IMAGES) return true;
 
         // Schedule capture on next render frame (overlay will be hidden for a clean screenshot)
         pendingCapture = true;
+        return true;
     }
 
-    public static void onKeyInput(InputEvent.Key event) {
+    /**
+     * Key handler. The loader subscribes this to its client key input. key is the
+     * GLFW key code; action 1 is press.
+     */
+    public static void onKeyInput(int key, int action) {
         if (!active) return;
-        if (event.getKey() == ESC_KEY && event.getAction() == 1) {
-            Minecraft.getInstance().execute(CameraMode::stop);
+        if (key == ESC_KEY && action == 1) {
+            MinecraftClient.getInstance().execute(CameraMode::stop);
         }
     }
 
     private static void captureScreenshot() {
         try {
-            Minecraft mc = Minecraft.getInstance();
-            RenderTarget fb = mc.getMainRenderTarget();
-            NativeImage image = new NativeImage(fb.width, fb.height, false);
-            fb.bindRead();
-            image.downloadTexture(0, false);
-            fb.unbindRead();
-            image.flipY();
+            MinecraftClient mc = MinecraftClient.getInstance();
+            Framebuffer fb = mc.getFramebuffer();
+            // ScreenshotRecorder reads the framebuffer on the render thread and
+            // returns an image already flipped to top-down, the same pixels the
+            // old bindRead plus downloadTexture plus flipY produced.
+            NativeImage image = ScreenshotRecorder.takeScreenshot(fb);
 
             Path dir = Path.of("schematicraft_screenshots");
             Files.createDirectories(dir);
             Path out = dir.resolve("sc_" + System.currentTimeMillis() + ".png");
-            image.writeToFile(out);
+            image.writeTo(out);
             image.close();
 
             capturedImages.add(out);
             captureCount++;
             flashTimer = FLASH_DURATION_TICKS;
-            LOGGER.info("Captured: {} ({}x{})", out.getFileName(), fb.width, fb.height);
+            LOGGER.info("Captured: {} ({}x{})", out.getFileName(), fb.textureWidth, fb.textureHeight);
         } catch (Exception e) {
             LOGGER.error("Capture failed: {}", e.getMessage());
         }

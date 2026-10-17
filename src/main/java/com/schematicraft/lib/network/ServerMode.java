@@ -1,7 +1,7 @@
 package com.schematicraft.lib.network;
 
 import com.mojang.logging.LogUtils;
-import net.minecraft.client.Minecraft;
+import net.minecraft.client.MinecraftClient;
 import org.slf4j.Logger;
 
 import java.util.Objects;
@@ -45,16 +45,16 @@ public final class ServerMode {
     }
 
     private static void detect() {
-        Minecraft mc = Minecraft.getInstance();
+        MinecraftClient mc = MinecraftClient.getInstance();
 
-        if (mc.isLocalServer()) {
+        if (mc.isIntegratedServerRunning()) {
             checked = true;
             serverHasCapability = true;
             LOGGER.info("Singleplayer detected, server capability enabled");
             return;
         }
 
-        if (mc.getConnection() == null) {
+        if (mc.getNetworkHandler() == null) {
             // Not connected yet. Do not cache so a later call can detect again.
             serverHasCapability = false;
             return;

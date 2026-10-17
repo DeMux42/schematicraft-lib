@@ -1,10 +1,10 @@
 package com.schematicraft.lib.client.gui;
 
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.screens.Screen;
-import net.minecraft.world.entity.player.Player;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.entity.player.PlayerEntity;
 
-import javax.annotation.Nullable;
+import org.jetbrains.annotations.Nullable;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -19,7 +19,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 public final class EditorJourney {
     @FunctionalInterface
     public interface HeldResolver {
-        @Nullable EditorJourney resolve(Player player);
+        @Nullable EditorJourney resolve(PlayerEntity player);
     }
 
     private static final List<HeldResolver> HELD_RESOLVERS =
@@ -47,7 +47,7 @@ public final class EditorJourney {
     @Nullable public String openingNotice() { return openingNotice; }
 
     public void returnToOrigin() {
-        Minecraft.getInstance().setScreen(returnScreen);
+        MinecraftClient.getInstance().setScreen(returnScreen);
     }
 
     public static void registerHeldResolver(HeldResolver resolver) {
@@ -56,7 +56,7 @@ public final class EditorJourney {
 
     /** Resolve the first editor that recognizes the held item. */
     public static EditorJourney resolveHeld() {
-        Player player = Minecraft.getInstance().player;
+        PlayerEntity player = MinecraftClient.getInstance().player;
         if (player == null) return browse();
 
         for (HeldResolver resolver : HELD_RESOLVERS) {

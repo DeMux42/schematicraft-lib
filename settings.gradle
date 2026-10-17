@@ -1,8 +1,11 @@
 pluginManagement {
     repositories {
-        mavenLocal()
+        // Fabric Loom and the Fabric toolchain live here.
+        maven {
+            name = 'Fabric'
+            url = 'https://maven.fabricmc.net/'
+        }
         gradlePluginPortal()
-        maven { url = 'https://maven.neoforged.net/releases' }
     }
 }
 

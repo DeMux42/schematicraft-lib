@@ -1,6 +1,6 @@
 package com.schematicraft.lib.client.gui;
 
-import net.minecraft.network.chat.Component;
+import net.minecraft.text.Text;
 
 /**
  * Single source of truth for the Schematicraft entry button in editor screens.
@@ -90,14 +90,14 @@ public final class SchematicraftButton {
      * configured drops the glyph and uses blue, meaning this opens setup rather
      * than the library.
      */
-    public static Component label(boolean configured) {
-        return Component.literal(configured
+    public static Text label(boolean configured) {
+        return Text.literal(configured
                 ? "\u00a7a\u2601 Schematicraft"
                 : "\u00a7bSchematicraft");
     }
 
     /** Tooltip text for the not-configured state, shared by every screen. */
-    public static Component setupTooltip() {
-        return Component.literal("Connect your Schematicraft account to browse your cloud library.");
+    public static Text setupTooltip() {
+        return Text.literal("Connect your Schematicraft account to browse your cloud library.");
     }
 }

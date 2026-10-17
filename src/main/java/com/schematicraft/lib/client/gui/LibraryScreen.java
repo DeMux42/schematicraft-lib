@@ -10,17 +10,17 @@ import com.schematicraft.lib.core.IngameDownload;
 import com.schematicraft.lib.core.LibraryState;
 import com.schematicraft.lib.core.SchematicEntry;
 import com.schematicraft.lib.network.SchematiCraftAPIWrapper;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.client.gui.components.EditBox;
-import net.minecraft.client.gui.screens.Screen;
-import net.minecraft.network.chat.Component;
-import net.minecraft.resources.ResourceLocation;
-import net.minecraft.world.item.ItemStack;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.gui.DrawContext;
+import net.minecraft.client.gui.widget.TextFieldWidget;
+import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.text.Text;
+import net.minecraft.util.Identifier;
+import net.minecraft.item.ItemStack;
 import org.lwjgl.glfw.GLFW;
 import org.slf4j.Logger;
 
-import javax.annotation.Nullable;
+import org.jetbrains.annotations.Nullable;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -90,7 +90,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
     private final TargetDevice targetDevice;
 
     // Widgets
-    private EditBox searchField;
+    private TextFieldWidget searchField;
 
     // Search debounce
     private long lastSearchKeystroke = 0;
@@ -108,7 +108,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
     private static EditorJourney pendingCameraJourney = null;
 
     // Tooltip state (collected during render, drawn last)
-    private List<Component> pendingTooltip = null;
+    private List<Text> pendingTooltip = null;
     private int tooltipX, tooltipY;
 
     // Bounds of the "+" tab, computed during render so clicks match what is drawn.
@@ -161,7 +161,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
     private boolean suppressNextChar = true;
 
     public LibraryScreen(EditorJourney journey) {
-        super(Component.literal("Schematicraft Library"));
+        super(Text.literal("Schematicraft Library"));
         this.journey = journey;
         this.targetDevice = journey.target();
     }
@@ -192,12 +192,12 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
         // Search field. Permanently focused and cannot lose focus: typing always
         // filters, and arrows/Enter always drive the grid. There is deliberately
         // no focus mode to switch, so no keystroke ever changes meaning.
-        searchField = new EditBox(this.font, GRID_PADDING, TAB_BAR_H + 2,
-                this.width - GRID_PADDING * 2, SEARCH_FIELD_H, Component.literal(""));
+        searchField = new TextFieldWidget(this.textRenderer, GRID_PADDING, TAB_BAR_H + 2,
+                this.width - GRID_PADDING * 2, SEARCH_FIELD_H, Text.literal(""));
         searchField.setMaxLength(100);
-        searchField.setHint(Component.literal("Type to filter..."));
-        searchField.setValue(gridState.getSearchText());
-        searchField.setResponder(text -> {
+        searchField.setPlaceholder(Text.literal("Type to filter..."));
+        searchField.setText(gridState.getSearchText());
+        searchField.setChangedListener(text -> {
             if (gridState.isDiscover()) {
                 // Server query, so only note the keystroke; tickDiscover decides
                 // when to actually send it.
@@ -208,12 +208,12 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
                 lastSearchKeystroke = System.currentTimeMillis();
             }
         });
-        searchField.setHint(Component.literal(gridState.isDiscover()
+        searchField.setPlaceholder(Text.literal(gridState.isDiscover()
                 ? "Search public schematics, Enter to search"
                 : "Type to filter..."));
-        searchField.setCanLoseFocus(false);
+        searchField.setFocusUnlocked(false);
         searchField.setFocused(true);
-        this.addRenderableWidget(searchField);
+        this.addDrawableChild(searchField);
         this.setInitialFocus(searchField);
 
         // Load library on first open
@@ -407,7 +407,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
         String sort = query.isEmpty() ? "popular" : null;
 
         SchematiCraftAPIWrapper.get().searchPublic(query, page, sort)
-                .thenAccept(result -> Minecraft.getInstance().execute(() -> {
+                .thenAccept(result -> MinecraftClient.getInstance().execute(() -> {
                     discoverInFlight = null;
                     discover.addPage(result.results(), result.page(),
                             result.hasMore(), result.total());
@@ -420,7 +420,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
                     }
                 }))
                 .exceptionally(ex -> {
-                    Minecraft.getInstance().execute(() -> {
+                    MinecraftClient.getInstance().execute(() -> {
                         discoverInFlight = null;
                         String msg = SchematiCraftAPIWrapper.rootMessage(ex);
                         // Rate limiting is expected if someone hammers search.
@@ -448,12 +448,12 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
     }
 
     @Override
-    public boolean isPauseScreen() {
+    public boolean shouldPause() {
         return false;
     }
 
     @Override
-    public void onClose() {
+    public void close() {
         journey.returnToOrigin();
     }
 
@@ -462,7 +462,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
     // --------------------------------------------------
 
     @Override
-    public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+    public void render(DrawContext graphics, int mouseX, int mouseY, float partialTick) {
         pendingTooltip = null;
 
         // Background
@@ -485,7 +485,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
 
         // Tooltips drawn last (on top of everything)
         if (pendingTooltip != null && !previewExpanded) {
-            graphics.renderComponentTooltip(this.font, pendingTooltip, tooltipX, tooltipY);
+            graphics.drawTooltip(this.textRenderer, pendingTooltip, tooltipX, tooltipY);
         }
 
         // Preview expand overlay (on top of everything)
@@ -493,11 +493,11 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
     }
 
     @Override
-    public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+    public void renderBackground(DrawContext graphics, int mouseX, int mouseY, float partialTick) {
         // Skip default dirt background
     }
 
-    private void renderTabBar(GuiGraphics graphics, int mouseX, int mouseY) {
+    private void renderTabBar(DrawContext graphics, int mouseX, int mouseY) {
         graphics.fill(0, 0, this.width, TAB_BAR_H, GuiColors.PANEL_BG);
         graphics.fill(0, TAB_BAR_H - 1, this.width, TAB_BAR_H, GuiColors.BORDER_SEPARATOR);
 
@@ -523,13 +523,13 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
         boolean allActive = inLibrary && gridState.getActiveBundleIndex() == -1;
         int allText = allActive ? GuiColors.BUNDLE_TAB_ACTIVE : GuiColors.TEXT_SECONDARY;
         String allLabel = "All";
-        int allW = this.font.width(allLabel) + TAB_PAD_INNER;
+        int allW = this.textRenderer.getWidth(allLabel) + TAB_PAD_INNER;
         if (allActive) graphics.fill(x, TAB_Y_OFFSET, x + allW, TAB_Y_OFFSET + TAB_H, GuiColors.BUNDLE_TAB_ACTIVE_BG);
-        graphics.drawString(this.font, allLabel, x + TAB_PAD_X, TAB_Y_OFFSET + 3, allText, false);
+        graphics.drawText(this.textRenderer, allLabel, x + TAB_PAD_X, TAB_Y_OFFSET + 3, allText, false);
         if (isOver(mouseX, mouseY, x, TAB_Y_OFFSET, allW, TAB_H)) {
             scheduleTooltip(List.of(
-                    Component.literal("All schematics"),
-                    Component.literal("\u00a78Ctrl+Tab / Ctrl+Shift+Tab to cycle")
+                    Text.literal("All schematics"),
+                    Text.literal("\u00a78Ctrl+Tab / Ctrl+Shift+Tab to cycle")
             ), mouseX, mouseY);
         }
         bundleTabBounds.add(new int[] { x, allW });
@@ -543,17 +543,17 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
             int textColor = active ? GuiColors.BUNDLE_TAB_ACTIVE : GuiColors.TEXT_SECONDARY;
 
             String label = "[" + (i + 1) + "] " + truncate(tab.name(), TAB_NAME_MAX_LEN);
-            int tabW = this.font.width(label) + TAB_PAD_INNER;
+            int tabW = this.textRenderer.getWidth(label) + TAB_PAD_INNER;
 
             if (x + tabW > this.width - GRID_PADDING) break;
 
             if (active) graphics.fill(x, TAB_Y_OFFSET, x + tabW, TAB_Y_OFFSET + TAB_H, GuiColors.BUNDLE_TAB_ACTIVE_BG);
-            graphics.drawString(this.font, label, x + TAB_PAD_X, TAB_Y_OFFSET + 3, textColor, false);
+            graphics.drawText(this.textRenderer, label, x + TAB_PAD_X, TAB_Y_OFFSET + 3, textColor, false);
 
             if (isOver(mouseX, mouseY, x, TAB_Y_OFFSET, tabW, TAB_H)) {
                 scheduleTooltip(List.of(
-                        Component.literal(tab.name()),
-                        Component.literal("\u00a78Ctrl+" + (i + 1) + " to jump")
+                        Text.literal(tab.name()),
+                        Text.literal("\u00a78Ctrl+" + (i + 1) + " to jump")
                 ), mouseX, mouseY);
             }
 
@@ -562,15 +562,15 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
         }
 
         // "+" tab, always last, for creating a bundle.
-        int plusW = this.font.width(PLUS_LABEL) + TAB_PAD_INNER;
+        int plusW = this.textRenderer.getWidth(PLUS_LABEL) + TAB_PAD_INNER;
         if (x + plusW <= this.width - GRID_PADDING) {
             boolean plusHover = isOver(mouseX, mouseY, x, TAB_Y_OFFSET, plusW, TAB_H);
             if (plusHover) {
                 graphics.fill(x, TAB_Y_OFFSET, x + plusW, TAB_Y_OFFSET + TAB_H,
                         GuiColors.TILE_HOVER_BG);
-                scheduleTooltip(List.of(Component.literal("New bundle")), mouseX, mouseY);
+                scheduleTooltip(List.of(Text.literal("New bundle")), mouseX, mouseY);
             }
-            graphics.drawString(this.font, PLUS_LABEL, x + TAB_PAD_X, TAB_Y_OFFSET + 3,
+            graphics.drawText(this.textRenderer, PLUS_LABEL, x + TAB_PAD_X, TAB_Y_OFFSET + 3,
                     plusHover ? GuiColors.SELECTED : GuiColors.TEXT_SECONDARY, false);
         }
         plusTabX = x;
@@ -590,8 +590,8 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
         gridState.clearStatus();
 
         if (searchField != null) {
-            searchField.setValue("");
-            searchField.setHint(Component.literal(scope == GridState.Scope.DISCOVER
+            searchField.setText("");
+            searchField.setPlaceholder(Text.literal(scope == GridState.Scope.DISCOVER
                     ? "Search public schematics, Enter to search"
                     : "Type to filter..."));
         }
@@ -599,10 +599,10 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
     }
 
     /** Draws one scope tab and records its bounds for hit-testing. */
-    private int renderScopeTab(GuiGraphics graphics, int x, GridState.Scope scope,
+    private int renderScopeTab(DrawContext graphics, int x, GridState.Scope scope,
                                String label, int mouseX, int mouseY) {
         boolean active = gridState.getScope() == scope;
-        int w = this.font.width(label) + TAB_PAD_INNER;
+        int w = this.textRenderer.getWidth(label) + TAB_PAD_INNER;
 
         if (active) {
             graphics.fill(x, TAB_Y_OFFSET, x + w, TAB_Y_OFFSET + TAB_H,
@@ -611,7 +611,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
             graphics.fill(x, TAB_Y_OFFSET, x + w, TAB_Y_OFFSET + TAB_H,
                     GuiColors.TILE_HOVER_BG);
         }
-        graphics.drawString(this.font, label, x + TAB_PAD_X, TAB_Y_OFFSET + 3,
+        graphics.drawText(this.textRenderer, label, x + TAB_PAD_X, TAB_Y_OFFSET + 3,
                 active ? GuiColors.BUNDLE_TAB_ACTIVE : GuiColors.TEXT_SECONDARY, false);
 
         if (scope == GridState.Scope.DISCOVER) {
@@ -624,7 +624,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
         return x + w + TAB_PAD_X;
     }
 
-    private void renderGrid(GuiGraphics graphics, int mouseX, int mouseY) {
+    private void renderGrid(DrawContext graphics, int mouseX, int mouseY) {
         graphics.enableScissor(0, gridTop, this.width - SCROLLBAR_W, gridBottom);
 
         List<GridState.DisplayEntry> displayList = gridState.getDisplayList();
@@ -645,7 +645,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
                             this.width - GRID_PADDING - SCROLLBAR_W, y + 2 + TILE_NAME_H,
                             GuiColors.BUNDLE_HEADER_DIM);
                     String headerText = header.name() + " (" + header.count() + ")";
-                    graphics.drawString(this.font, headerText,
+                    graphics.drawText(this.textRenderer, headerText,
                             GRID_PADDING + TAB_PAD_X, y + 4, GuiColors.BUNDLE_HEADER, false);
                 }
                 y += BUNDLE_HEADER_H + TILE_GAP;
@@ -674,7 +674,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
         if (displayList.isEmpty()) {
             renderGridPlaceholder(graphics);
         } else if (gridState.isDiscover() && DiscoverState.get().isLoading()) {
-            graphics.drawCenteredString(this.font, "Loading more...",
+            graphics.drawCenteredTextWithShadow(this.textRenderer, "Loading more...",
                     this.width / 2, gridBottom - 14, GuiColors.TEXT_DIM);
         }
 
@@ -684,12 +684,12 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
     }
 
     /** Explains an empty grid, which differs by scope and cause. */
-    private void renderGridPlaceholder(GuiGraphics graphics) {
+    private void renderGridPlaceholder(DrawContext graphics) {
         int cx = this.width / 2;
         int cy = gridTop + (gridBottom - gridTop) / 2;
 
         if (!ModConfig.hasApiKey()) {
-            graphics.drawCenteredString(this.font, "Set your API key to get started",
+            graphics.drawCenteredTextWithShadow(this.textRenderer, "Set your API key to get started",
                     cx, cy, GuiColors.TEXT_SECONDARY);
             return;
         }
@@ -697,21 +697,21 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
         if (gridState.isDiscover()) {
             DiscoverState d = DiscoverState.get();
             if (d.isLoading()) {
-                graphics.drawCenteredString(this.font, "Loading public schematics...",
+                graphics.drawCenteredTextWithShadow(this.textRenderer, "Loading public schematics...",
                         cx, cy, GuiColors.TEXT_SECONDARY);
             } else if (d.getError() != null) {
-                graphics.drawCenteredString(this.font, d.getError(), cx, cy - 6,
+                graphics.drawCenteredTextWithShadow(this.textRenderer, d.getError(), cx, cy - 6,
                         GuiColors.ERROR);
-                graphics.drawCenteredString(this.font, "Press Enter to try again",
+                graphics.drawCenteredTextWithShadow(this.textRenderer, "Press Enter to try again",
                         cx, cy + 6, GuiColors.TEXT_DIM);
             } else if (!d.getQuery().isEmpty()) {
-                graphics.drawCenteredString(this.font,
+                graphics.drawCenteredTextWithShadow(this.textRenderer,
                         "No public schematics match \"" + d.getQuery() + "\"",
                         cx, cy - 6, GuiColors.TEXT_SECONDARY);
-                graphics.drawCenteredString(this.font, "Clear the box to browse popular builds",
+                graphics.drawCenteredTextWithShadow(this.textRenderer, "Clear the box to browse popular builds",
                         cx, cy + 6, GuiColors.TEXT_DIM);
             } else {
-                graphics.drawCenteredString(this.font, "No public schematics found",
+                graphics.drawCenteredTextWithShadow(this.textRenderer, "No public schematics found",
                         cx, cy, GuiColors.TEXT_SECONDARY);
             }
             return;
@@ -719,20 +719,20 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
 
         // My Library
         if (!gridState.getSearchText().isEmpty()) {
-            graphics.drawCenteredString(this.font, "Nothing in your library matches",
+            graphics.drawCenteredTextWithShadow(this.textRenderer, "Nothing in your library matches",
                     cx, cy, GuiColors.TEXT_SECONDARY);
         } else if (LibraryState.get().isLibraryLoading()) {
-            graphics.drawCenteredString(this.font, "Loading your library...",
+            graphics.drawCenteredTextWithShadow(this.textRenderer, "Loading your library...",
                     cx, cy, GuiColors.TEXT_SECONDARY);
         } else {
-            graphics.drawCenteredString(this.font, "Your library is empty",
+            graphics.drawCenteredTextWithShadow(this.textRenderer, "Your library is empty",
                     cx, cy - 6, GuiColors.TEXT_SECONDARY);
-            graphics.drawCenteredString(this.font, "Upload a build, or grab one from Discover",
+            graphics.drawCenteredTextWithShadow(this.textRenderer, "Upload a build, or grab one from Discover",
                     cx, cy + 6, GuiColors.TEXT_DIM);
         }
     }
 
-    private void renderTile(GuiGraphics graphics, GridState.SchematicTileEntry tile,
+    private void renderTile(DrawContext graphics, GridState.SchematicTileEntry tile,
                             int x, int y, int schematicIdx, int mouseX, int mouseY) {
         SchematicEntry schematic = tile.schematic();
         boolean selected = schematicIdx == gridState.getSelectedIndex();
@@ -747,10 +747,10 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
         drawBorder(graphics, x, y, tileSize, tileThumbH, border);
 
         // Thumbnail
-        ResourceLocation tex = ThumbnailCache.get().getTexture(
+        Identifier tex = ThumbnailCache.get().getTexture(
                 schematic.id(), schematic.thumbnailUrl());
         if (tex != null) {
-            graphics.blit(tex, x + 1, y + 1, 0, 0,
+            graphics.drawTexture(tex, x + 1, y + 1, 0.0F, 0.0F,
                     tileSize - 2, tileThumbH - 2, tileSize - 2, tileThumbH - 2);
         } else {
             graphics.fill(x + 1, y + 1, x + tileSize - 1, y + tileThumbH - 1, 0xFF0A0A0A);
@@ -758,11 +758,11 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
                 // Has a thumbnail URL but still loading
                 int dotCount = (int) ((System.currentTimeMillis() / 500) % 4);
                 String dots = ".".repeat(dotCount);
-                graphics.drawCenteredString(this.font, dots,
+                graphics.drawCenteredTextWithShadow(this.textRenderer, dots,
                         x + tileSize / 2, y + tileThumbH / 2 - 4, GuiColors.TEXT_DIM);
             } else {
                 // No thumbnail available
-                graphics.drawCenteredString(this.font, "No image",
+                graphics.drawCenteredTextWithShadow(this.textRenderer, "No image",
                         x + tileSize / 2, y + tileThumbH / 2 - 4, GuiColors.TEXT_DIM);
             }
         }
@@ -783,48 +783,48 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
                 : (selected ? GuiColors.SELECTED
                 : (hovered ? GuiColors.HOVER_TEXT
                 : (tileOverSoft ? GuiColors.WARNING : GuiColors.TILE_NAME)));
-        graphics.drawString(this.font, truncated, x + 2, y + tileThumbH + 2, nameColor, false);
+        graphics.drawText(this.textRenderer, truncated, x + 2, y + tileThumbH + 2, nameColor, false);
 
         // Tooltip on hover
         if (hovered) {
-            List<Component> tooltip = new ArrayList<>();
-            tooltip.add(Component.literal(
+            List<Text> tooltip = new ArrayList<>();
+            tooltip.add(Text.literal(
                     schematic.title() != null ? schematic.title() : "Untitled"));
             if (schematic.description() != null && !schematic.description().isEmpty()) {
-                tooltip.add(Component.literal(
+                tooltip.add(Text.literal(
                         "\u00a77" + truncate(schematic.description(), 50)));
             }
             if (tile.bundleId() != null) {
                 String bundleName = findBundleName(tile.bundleId());
                 if (bundleName != null) {
-                    tooltip.add(Component.literal("\u00a7eBundle: " + bundleName));
+                    tooltip.add(Text.literal("\u00a7eBundle: " + bundleName));
                 }
             }
             if (schematic.downloadCount() > 0) {
-                tooltip.add(Component.literal(
+                tooltip.add(Text.literal(
                         "\u00a78" + schematic.downloadCount() + " downloads"));
             }
             if (schematic.hasDimensions()) {
-                tooltip.add(Component.literal("\u00a78" + schematic.dimensionsLabel()));
+                tooltip.add(Text.literal("\u00a78" + schematic.dimensionsLabel()));
             }
             if (schematic.hasBlockCount()) {
                 LoadLimits limits = getLoadLimits(targetDevice);
                 int count = schematic.blockCount();
                 if (limits.exceedsHard(count)) {
-                    tooltip.add(Component.literal("\u00a7c" + formatCount(count)
+                    tooltip.add(Text.literal("\u00a7c" + formatCount(count)
                             + " blocks, too big for " + targetDevice.getDisplayName()));
                 } else if (limits.exceedsSoft(count)) {
-                    tooltip.add(Component.literal("\u00a7e" + formatCount(count)
+                    tooltip.add(Text.literal("\u00a7e" + formatCount(count)
                             + " blocks, above " + targetDevice.getDisplayName() + " limit"));
                 } else {
-                    tooltip.add(Component.literal("\u00a78" + formatCount(count) + " blocks"));
+                    tooltip.add(Text.literal("\u00a78" + formatCount(count) + " blocks"));
                 }
             }
             scheduleTooltip(tooltip, mouseX, mouseY);
         }
     }
 
-    private void renderScrollbar(GuiGraphics graphics, int mouseX, int mouseY) {
+    private void renderScrollbar(DrawContext graphics, int mouseX, int mouseY) {
         int sbX = this.width - SCROLLBAR_W - SCROLLBAR_MARGIN;
         int sbHeight = gridBottom - gridTop;
 
@@ -843,7 +843,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
         graphics.fill(sbX, thumbY, sbX + SCROLLBAR_W, thumbY + thumbHeight, thumbColor);
     }
 
-    private void renderBottomBar(GuiGraphics graphics, int mouseX, int mouseY) {
+    private void renderBottomBar(DrawContext graphics, int mouseX, int mouseY) {
         int barY = this.height - BOTTOM_BAR_H - STATUS_BAR_H;
 
         graphics.fill(0, barY, this.width, this.height - STATUS_BAR_H, GuiColors.BOTTOM_BAR_BG);
@@ -865,7 +865,6 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
                 // 3D render: parse and prepare if needed
                 ensurePreviewPrepared(selected.id());
                 if (renderer.isReady()) {
-                    graphics.flush();
                     renderer.renderAutoRotate(graphics, PREVIEW_X + 1, previewTop + 1,
                             PREVIEW_W - 2, previewH - 2);
                 } else {
@@ -878,17 +877,17 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
             // Click hint on hover
             if (isOver(mouseX, mouseY, PREVIEW_X, previewTop, PREVIEW_W, previewH)) {
                 drawBorder(graphics, PREVIEW_X, previewTop, PREVIEW_W, previewH, GuiColors.SELECTED);
-                scheduleTooltip(List.of(Component.literal("Click to expand")), mouseX, mouseY);
+                scheduleTooltip(List.of(Text.literal("Click to expand")), mouseX, mouseY);
             }
         } else {
-            graphics.drawCenteredString(this.font, "No selection",
+            graphics.drawCenteredTextWithShadow(this.textRenderer, "No selection",
                     PREVIEW_X + PREVIEW_W / 2, barY + 34, GuiColors.TEXT_DIM);
         }
 
         // Center: Info + Actions
         if (selected != null) {
             String title = selected.title() != null ? selected.title() : "Untitled";
-            graphics.drawString(this.font, title, INFO_X, barY + 6,
+            graphics.drawText(this.textRenderer, title, INFO_X, barY + 6,
                     GuiColors.SELECTED, false);
 
             // In Discover the useful second line is who made it, not a bundle.
@@ -901,7 +900,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
                 String bundleName = bundleId != null ? findBundleName(bundleId) : "Unbundled";
                 subtitle = bundleName != null ? bundleName : "";
             }
-            graphics.drawString(this.font, "\u00a77" + subtitle,
+            graphics.drawText(this.textRenderer, "\u00a77" + subtitle,
                     INFO_X, barY + 18, GuiColors.TEXT_SECONDARY, false);
 
             String meta = selected.downloadCount() > 0
@@ -925,7 +924,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
                         metaColor = GuiColors.WARNING;
                     }
                 }
-                graphics.drawString(this.font, meta,
+                graphics.drawText(this.textRenderer, meta,
                         INFO_X, barY + 28, metaColor, false);
             }
         }
@@ -939,21 +938,21 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
 
         graphics.fill(INFO_X, btnY, INFO_X + LOAD_BTN_W, btnY + ACTION_BTN_H, loadBg);
         drawBorder(graphics, INFO_X, btnY, LOAD_BTN_W, ACTION_BTN_H, loadBorder);
-        graphics.drawCenteredString(this.font, loadLabel,
+        graphics.drawCenteredTextWithShadow(this.textRenderer, loadLabel,
                 INFO_X + LOAD_BTN_W / 2, btnY + 4, loadTextColor);
 
         if (isOver(mouseX, mouseY, INFO_X, btnY, LOAD_BTN_W, ACTION_BTN_H)) {
             if (loadEnabled) {
                 scheduleTooltip(List.of(
-                        Component.literal(targetDevice.getLoadButtonText()),
-                        Component.literal("\u00a77" + targetDevice.getDestinationHint()),
-                        Component.literal("\u00a78Enter to load"),
-                        Component.literal("\u00a78Mode: " + targetDevice.getModeLabel())
+                        Text.literal(targetDevice.getLoadButtonText()),
+                        Text.literal("\u00a77" + targetDevice.getDestinationHint()),
+                        Text.literal("\u00a78Enter to load"),
+                        Text.literal("\u00a78Mode: " + targetDevice.getModeLabel())
                 ), mouseX, mouseY);
             } else {
                 scheduleTooltip(List.of(
-                        Component.literal("No target device"),
-                        Component.literal("\u00a78Hold a Copy/Paste gadget or open a table")
+                        Text.literal("No target device"),
+                        Text.literal("\u00a78Hold a Copy/Paste gadget or open a table")
                 ), mouseX, mouseY);
             }
         }
@@ -970,7 +969,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
                 btnY + ACTION_BTN_H, uploadBg);
         drawBorder(graphics, uploadBtnX, btnY, ACTION_BTN_W,
                 ACTION_BTN_H, uploadBorder);
-        graphics.drawCenteredString(this.font, "Upload",
+        graphics.drawCenteredTextWithShadow(this.textRenderer, "Upload",
                 uploadBtnX + ACTION_BTN_W / 2, btnY + 4, uploadText);
 
         if (isOver(mouseX, mouseY, uploadBtnX, btnY, ACTION_BTN_W, ACTION_BTN_H)) {
@@ -979,9 +978,9 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
                     : (uploadEnabled ? "From " + uploadSource.displayName()
                     : uploadSource.emptyHint());
             scheduleTooltip(List.of(
-                    Component.literal(uploadEnabled ? "Upload build" : "Upload unavailable"),
-                    Component.literal("\u00a78" + sourceLine),
-                    Component.literal("\u00a78Shortcut: Ctrl+U")
+                    Text.literal(uploadEnabled ? "Upload build" : "Upload unavailable"),
+                    Text.literal("\u00a78" + sourceLine),
+                    Text.literal("\u00a78Shortcut: Ctrl+U")
             ), mouseX, mouseY);
         }
 
@@ -991,14 +990,14 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
                 btnY + ACTION_BTN_H, GuiColors.BTN_CAMERA_BG);
         drawBorder(graphics, camBtnX, btnY, ACTION_BTN_W,
                 ACTION_BTN_H, GuiColors.BTN_CAMERA_BORDER);
-        graphics.drawCenteredString(this.font, "[C]amera",
+        graphics.drawCenteredTextWithShadow(this.textRenderer, "[C]amera",
                 camBtnX + ACTION_BTN_W / 2, btnY + 4, GuiColors.BTN_CAMERA_TEXT);
 
         if (isOver(mouseX, mouseY, camBtnX, btnY, ACTION_BTN_W, ACTION_BTN_H)) {
             scheduleTooltip(List.of(
-                    Component.literal("Enter camera mode"),
-                    Component.literal("\u00a78Take screenshots for upload"),
-                    Component.literal("\u00a78Shortcut: Ctrl+K")
+                    Text.literal("Enter camera mode"),
+                    Text.literal("\u00a78Take screenshots for upload"),
+                    Text.literal("\u00a78Shortcut: Ctrl+K")
             ), mouseX, mouseY);
         }
 
@@ -1012,14 +1011,14 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
                 btnY + ACTION_BTN_H, palBg);
         drawBorder(graphics, palBtnX, btnY, ACTION_BTN_W,
                 ACTION_BTN_H, palBorder);
-        graphics.drawCenteredString(this.font, "Palette",
+        graphics.drawCenteredTextWithShadow(this.textRenderer, "Palette",
                 palBtnX + ACTION_BTN_W / 2, btnY + 4, palText);
 
         if (isOver(mouseX, mouseY, palBtnX, btnY, ACTION_BTN_W, ACTION_BTN_H)) {
             scheduleTooltip(List.of(
-                    Component.literal("Change block palette"),
-                    Component.literal("\u00a78Swap blocks before loading"),
-                    Component.literal("\u00a78Shortcut: Ctrl+P")
+                    Text.literal("Change block palette"),
+                    Text.literal("\u00a78Swap blocks before loading"),
+                    Text.literal("\u00a78Shortcut: Ctrl+P")
             ), mouseX, mouseY);
         }
 
@@ -1041,7 +1040,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
     }
 
     /** Render the independent download destination and upload source. */
-    private void renderTargetPanel(GuiGraphics graphics, int barY, int mouseX, int mouseY) {
+    private void renderTargetPanel(DrawContext graphics, int barY, int mouseX, int mouseY) {
         int panelX = this.width - TARGET_INFO_MARGIN;
         boolean available = targetDevice.isAvailable();
         UploadSource source = journey.uploadSource();
@@ -1063,26 +1062,26 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
                 : receiverX;
         float phase = (System.currentTimeMillis() % 2000L) / 2000f;
 
-        graphics.drawString(this.font, "Download to:", panelX, barY + 4,
+        graphics.drawText(this.textRenderer, "Download to:", panelX, barY + 4,
                 GuiColors.TEXT_DIM, false);
         if (available) {
             int color = targetDevice.getMode() == TargetDevice.Mode.SERVER
                     ? GuiColors.TARGET_SERVER : GuiColors.TARGET_CLIENT;
-            graphics.drawString(this.font,
+            graphics.drawText(this.textRenderer,
                     truncateToWidth(targetDevice.getDisplayName(), textWidth),
                     panelX, barY + 16, color, false);
             String detail = hasReceiver
-                    ? (receiverReady ? "into " + receiverStack.getHoverName().getString()
+                    ? (receiverReady ? "into " + receiverStack.getName().getString()
                     : entry.receiver().emptyHint())
                     : targetDevice.getModeLabel();
-            graphics.drawString(this.font, "\u00a78" + truncateToWidth(detail, textWidth),
+            graphics.drawText(this.textRenderer, "\u00a78" + truncateToWidth(detail, textWidth),
                     panelX, barY + 28,
                     hasReceiver && !receiverReady ? GuiColors.WARNING : GuiColors.TEXT_DIM,
                     false);
         } else {
-            graphics.drawString(this.font, "None", panelX, barY + 16,
+            graphics.drawText(this.textRenderer, "None", panelX, barY + 16,
                     GuiColors.TARGET_NONE, false);
-            graphics.drawString(this.font, "\u00a78Browse only", panelX, barY + 28,
+            graphics.drawText(this.textRenderer, "\u00a78Browse only", panelX, barY + 28,
                     GuiColors.TEXT_DIM, false);
         }
 
@@ -1106,12 +1105,12 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
             }
         }
 
-        graphics.drawString(this.font, "Upload from:", panelX, barY + 44,
+        graphics.drawText(this.textRenderer, "Upload from:", panelX, barY + 44,
                 GuiColors.TEXT_DIM, false);
         String sourceName = source != null ? source.displayName() : "None";
         int sourceColor = sourceReady ? GuiColors.SUCCESS
                 : (source != null ? GuiColors.WARNING : GuiColors.TARGET_NONE);
-        graphics.drawString(this.font, truncateToWidth(sourceName, textWidth),
+        graphics.drawText(this.textRenderer, truncateToWidth(sourceName, textWidth),
                 panelX, barY + 56, sourceColor, false);
 
         ItemStack sourceIcon = source != null ? source.icon() : ItemStack.EMPTY;
@@ -1131,21 +1130,21 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
     }
 
     /** One live target icon, floating gently, with a soft halo behind it. */
-    private void drawTargetIcon(GuiGraphics graphics, ItemStack stack,
+    private void drawTargetIcon(DrawContext graphics, ItemStack stack,
                                 int x, int y, float phase, int haloColor) {
         int bob = (int) Math.round(Math.sin(phase * Math.PI * 2) * 2.0);
         graphics.fill(x - 2, y - 2 + bob,
                 x + TARGET_ICON_SIZE + 2, y + TARGET_ICON_SIZE + 2 + bob,
                 haloColor);
-        graphics.renderItem(stack, x, y + bob);
+        graphics.drawItem(stack, x, y + bob);
     }
 
     /** An outlined slot, so a missing piece looks deliberate rather than broken. */
-    private void drawEmptyTargetSlot(GuiGraphics graphics, int x, int y, String glyph) {
+    private void drawEmptyTargetSlot(DrawContext graphics, int x, int y, String glyph) {
         graphics.fill(x, y, x + TARGET_ICON_SIZE, y + TARGET_ICON_SIZE, 0x30FFFFFF);
         drawBorder(graphics, x, y, TARGET_ICON_SIZE, TARGET_ICON_SIZE,
                 GuiColors.BORDER_DARK);
-        graphics.drawCenteredString(this.font, glyph,
+        graphics.drawCenteredTextWithShadow(this.textRenderer, glyph,
                 x + TARGET_ICON_SIZE / 2, y + 4, GuiColors.TEXT_DIM);
     }
 
@@ -1153,12 +1152,12 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
      * The compatibility list: every target Schematicraft supports, marked with
      * whether it is in use, ready, or unavailable because the mod is absent.
      */
-    private List<Component> buildCompatibilityTooltip() {
-        List<Component> lines = new ArrayList<>();
-        lines.add(Component.literal("Loads into"));
+    private List<Text> buildCompatibilityTooltip() {
+        List<Text> lines = new ArrayList<>();
+        lines.add(Text.literal("Loads into"));
 
         if (TargetCatalog.isEmpty()) {
-            lines.add(Component.literal("\u00a77No editor integrations active"));
+            lines.add(Text.literal("\u00a77No editor integrations active"));
             return lines;
         }
 
@@ -1166,40 +1165,40 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
             boolean isCurrent = targetDevice.isAvailable()
                     && targetDevice.getType().equals(entry.type());
             if (isCurrent) {
-                lines.add(Component.literal("\u00a7a\u2022 " + entry.label()
+                lines.add(Text.literal("\u00a7a\u2022 " + entry.label()
                         + " \u00a78(active)"));
                 if (entry.hasReceiver()) {
                     ItemStack stack = entry.receiverStack();
                     lines.add(stack.isEmpty()
-                            ? Component.literal("\u00a7e    " + entry.receiver().label()
+                            ? Text.literal("\u00a7e    " + entry.receiver().label()
                                     + " slot: " + entry.receiver().emptyHint())
-                            : Component.literal("\u00a77    " + entry.receiver().label()
-                                    + " slot: " + stack.getHoverName().getString()));
+                            : Text.literal("\u00a77    " + entry.receiver().label()
+                                    + " slot: " + stack.getName().getString()));
                 }
             } else if (entry.isInstalled()) {
-                lines.add(Component.literal("\u00a7f\u2022 " + entry.label()));
-                lines.add(Component.literal("\u00a78    " + entry.howToUse()));
+                lines.add(Text.literal("\u00a7f\u2022 " + entry.label()));
+                lines.add(Text.literal("\u00a78    " + entry.howToUse()));
             } else {
-                lines.add(Component.literal("\u00a78\u2022 " + entry.label()
+                lines.add(Text.literal("\u00a78\u2022 " + entry.label()
                         + " (not installed)"));
             }
         }
 
         UploadSource source = journey.uploadSource();
-        lines.add(Component.literal(""));
-        lines.add(Component.literal("Uploads from"));
+        lines.add(Text.literal(""));
+        lines.add(Text.literal("Uploads from"));
         if (source == null) {
-            lines.add(Component.literal("\u00a78No source in this context"));
+            lines.add(Text.literal("\u00a78No source in this context"));
         } else if (source.isReady()) {
-            lines.add(Component.literal("\u00a7a\u2022 " + source.displayName()));
+            lines.add(Text.literal("\u00a7a\u2022 " + source.displayName()));
         } else {
-            lines.add(Component.literal("\u00a7e" + source.displayName()));
-            lines.add(Component.literal("\u00a78    " + source.emptyHint()));
+            lines.add(Text.literal("\u00a7e" + source.displayName()));
+            lines.add(Text.literal("\u00a78    " + source.emptyHint()));
         }
         return lines;
     }
 
-    private void renderStatusBar(GuiGraphics graphics) {
+    private void renderStatusBar(DrawContext graphics) {
         int y = this.height - STATUS_BAR_H;
         graphics.fill(0, y, this.width, this.height, GuiColors.STATUS_BAR_BG);
         graphics.fill(0, y, this.width, y + 1, GuiColors.BORDER_SEPARATOR);
@@ -1207,20 +1206,20 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
         // Left: schematic count
         int count = gridState.getSchematicCount();
         String countText = count + " schematic" + (count != 1 ? "s" : "");
-        graphics.drawString(this.font, countText, GRID_PADDING, y + 3,
+        graphics.drawText(this.textRenderer, countText, GRID_PADDING, y + 3,
                 GuiColors.TEXT_DIM, false);
 
         // Center: status message
         String status = gridState.getStatusText();
         if (!status.isEmpty()) {
-            graphics.drawCenteredString(this.font, status,
+            graphics.drawCenteredTextWithShadow(this.textRenderer, status,
                     this.width / 2, y + 3, gridState.getStatusColor());
         }
 
         // Right: keyboard hints. Fixed, because the keys never change meaning.
         String hints = "Type: filter | Arrows: navigate | Enter: load | Esc: back";
-        int hintsW = this.font.width(hints);
-        graphics.drawString(this.font, hints,
+        int hintsW = this.textRenderer.getWidth(hints);
+        graphics.drawText(this.textRenderer, hints,
                 this.width - hintsW - GRID_PADDING, y + 3, GuiColors.TEXT_DIM, false);
     }
 
@@ -1255,11 +1254,11 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
                 actionFocus = ACTION_NONE;
                 return true;
             }
-            if (searchField != null && !searchField.getValue().isEmpty()) {
+            if (searchField != null && !searchField.getText().isEmpty()) {
                 clearSearch();
                 return true;
             }
-            this.onClose();
+            this.close();
             return true;
         }
 
@@ -1388,7 +1387,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
     // --------------------------------------------------
 
     private void clearSearch() {
-        searchField.setValue("");
+        searchField.setText("");
         gridState.setSearchText("");
         pendingSearchText = null;
         recomputeMaxScroll();
@@ -1520,7 +1519,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
         boolean visible = !gridState.isDiscover();
         if (visible) setStatus("Loading library...", GuiColors.INFO, 0);
         SchematiCraftAPIWrapper.get().loadLibrary().thenRun(() -> {
-            Minecraft.getInstance().execute(() -> {
+            MinecraftClient.getInstance().execute(() -> {
                 gridState.onLibraryUpdated();
                 recomputeMaxScroll();
                 if (!gridState.isDiscover()) {
@@ -1529,7 +1528,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
                 }
             });
         }).exceptionally(ex -> {
-            Minecraft.getInstance().execute(() -> {
+            MinecraftClient.getInstance().execute(() -> {
                 String msg = SchematiCraftAPIWrapper.rootMessage(ex);
                 setStatus("Load failed: " + msg, GuiColors.ERROR, 5000);
             });
@@ -1593,7 +1592,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
                 selected.id(), targetDevice.getDownloadFormat(), targetDevice.getDownloadEditor(),
                 confirm)
                 .thenAccept(result -> {
-            Minecraft.getInstance().execute(() -> {
+            MinecraftClient.getInstance().execute(() -> {
                 try {
                     long fileBytes = Files.size(result.file);
 
@@ -1653,7 +1652,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
                             SchematiCraftAPIWrapper.get()
                                     .submitSuccessFeedback(result.downloadId);
                         }
-                        this.onClose();
+                        this.close();
                     } else {
                         // Stay on the screen so the user can read why and pick
                         // something else, rather than closing onto an unchanged tool.
@@ -1674,11 +1673,11 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
                 }
             });
         }).exceptionally(ex -> {
-            Minecraft.getInstance().execute(() -> {
+            MinecraftClient.getInstance().execute(() -> {
                 IngameDownload.Loss loss = IngameDownload.lossOf(ex);
-                if (loss != null && Minecraft.getInstance().screen == this) {
+                if (loss != null && MinecraftClient.getInstance().currentScreen == this) {
                     setStatus("", GuiColors.TEXT_DIM, 0);
-                    Minecraft.getInstance().setScreen(new ConfirmLossScreen(
+                    MinecraftClient.getInstance().setScreen(new ConfirmLossScreen(
                             this, loss, () -> download(selected, limits, false)));
                     return;
                 }
@@ -1824,13 +1823,13 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
         pendingCameraSchematicTitle = selected.title();
         pendingCameraJourney = journey;
 
-        this.minecraft.setScreen(null);
+        this.client.setScreen(null);
         CameraMode.start(pendingCameraImages, () -> {
-            Minecraft.getInstance().execute(() -> {
+            MinecraftClient.getInstance().execute(() -> {
                 EditorJourney reopen = pendingCameraJourney != null
                         ? pendingCameraJourney : EditorJourney.browse();
                 pendingCameraJourney = null;
-                Minecraft.getInstance().setScreen(new LibraryScreen(reopen));
+                MinecraftClient.getInstance().setScreen(new LibraryScreen(reopen));
             });
         });
     }
@@ -1846,7 +1845,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
             setStatus(source.emptyHint(), GuiColors.WARNING, 4000);
             return;
         }
-        Minecraft.getInstance().setScreen(new UploadScreen(source, journey));
+        MinecraftClient.getInstance().setScreen(new UploadScreen(source, journey));
     }
 
     private void openPaletteScreen() {
@@ -1855,7 +1854,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
             setStatus("Select a schematic first", GuiColors.WARNING, 2000);
             return;
         }
-        Minecraft.getInstance().setScreen(new PaletteScreen(selected, journey));
+        MinecraftClient.getInstance().setScreen(new PaletteScreen(selected, journey));
     }
 
     // --------------------------------------------------
@@ -1878,7 +1877,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
         // "+" first: its bounds come from the last render, so it always matches.
         if (plusTabX >= 0 && isOver((int) mouseX, (int) mouseY,
                 plusTabX, TAB_Y_OFFSET, plusTabW, TAB_H)) {
-            Minecraft.getInstance().setScreen(
+            MinecraftClient.getInstance().setScreen(
                     new NewBundleScreen(new LibraryScreen(journey), null));
             return;
         }
@@ -2063,7 +2062,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
         }
     }
 
-    private void renderPreviewOverlay(GuiGraphics graphics, int mouseX, int mouseY) {
+    private void renderPreviewOverlay(DrawContext graphics, int mouseX, int mouseY) {
         if (!previewExpanded) return;
 
         var renderer = com.schematicraft.lib.client.preview.SchematicPreviewRenderer.get();
@@ -2081,11 +2080,10 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
         graphics.fill(px - 2, py - 2, px + pw + 2, py + ph + 2, GuiColors.BORDER_SEPARATOR);
         graphics.fill(px, py, px + pw, py + ph, 0xFF0A0A0A);
 
-        graphics.flush();
         renderer.renderInteractive(graphics, px, py, pw, ph);
 
         // Instructions
-        graphics.drawCenteredString(this.font, "Drag to rotate, scroll to zoom, click/Esc to close",
+        graphics.drawCenteredTextWithShadow(this.textRenderer, "Drag to rotate, scroll to zoom, click/Esc to close",
                 this.width / 2, py + ph + 8, GuiColors.TEXT_DIM);
     }
 
@@ -2104,15 +2102,15 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
         lastPreparedSchematicId = schematicId;
     }
 
-    private void renderThumbnailPreview(GuiGraphics graphics, SchematicEntry selected,
+    private void renderThumbnailPreview(DrawContext graphics, SchematicEntry selected,
                                          int previewTop, int previewH) {
-        ResourceLocation tex = ThumbnailCache.get().getTexture(
+        Identifier tex = ThumbnailCache.get().getTexture(
                 selected.id(), selected.thumbnailUrl());
         if (tex != null) {
-            graphics.blit(tex, PREVIEW_X + 1, previewTop + 1, 0, 0,
+            graphics.drawTexture(tex, PREVIEW_X + 1, previewTop + 1, 0.0F, 0.0F,
                     PREVIEW_W - 2, previewH - 2, PREVIEW_W - 2, previewH - 2);
         } else {
-            graphics.drawCenteredString(this.font, "Preview",
+            graphics.drawCenteredTextWithShadow(this.textRenderer, "Preview",
                     PREVIEW_X + PREVIEW_W / 2, previewTop + previewH / 2 - 4, GuiColors.TEXT_DIM);
         }
     }
@@ -2125,7 +2123,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
         gridState.setStatus(text, color, durationMs);
     }
 
-    private void scheduleTooltip(List<Component> lines, int x, int y) {
+    private void scheduleTooltip(List<Text> lines, int x, int y) {
         this.pendingTooltip = lines;
         this.tooltipX = x;
         this.tooltipY = y;
@@ -2135,7 +2133,7 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
         return mouseX >= x && mouseX < x + w && mouseY >= y && mouseY < y + h;
     }
 
-    private static void drawBorder(GuiGraphics graphics,
+    private static void drawBorder(DrawContext graphics,
                                     int x, int y, int w, int h, int color) {
         graphics.fill(x, y, x + w, y + 1, color);
         graphics.fill(x, y + h - 1, x + w, y + h, color);
@@ -2149,16 +2147,16 @@ public class LibraryScreen extends Screen implements SchematicraftScreen {
     }
 
     private String truncateToWidth(String text, int maxWidth) {
-        if (this.font.width(text) <= maxWidth) return text;
+        if (this.textRenderer.getWidth(text) <= maxWidth) return text;
         String ellipsis = "\u2026";
-        int ellipsisW = this.font.width(ellipsis);
+        int ellipsisW = this.textRenderer.getWidth(ellipsis);
         int available = maxWidth - ellipsisW;
         if (available <= 0) return ellipsis;
 
         int lo = 0, hi = text.length();
         while (lo < hi) {
             int mid = (lo + hi + 1) / 2;
-            if (this.font.width(text.substring(0, mid)) <= available) {
+            if (this.textRenderer.getWidth(text.substring(0, mid)) <= available) {
                 lo = mid;
             } else {
                 hi = mid - 1;

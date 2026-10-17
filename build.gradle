@@ -1,50 +1,56 @@
 plugins {
+    id 'fabric-loom' version '1.14.10'
     id 'java-library'
     id 'maven-publish'
-    id 'net.neoforged.moddev' version '2.0.141'
 }
 
 version = mod_version
 group = mod_group_id
 
-repositories {
-    mavenLocal()
-    mavenCentral()
-}
-
 base {
     archivesName = mod_id
 }
 
-java.toolchain.languageVersion = JavaLanguageVersion.of(21)
-
-neoForge {
-    version = project.neo_version
-
-    parchment {
-        mappingsVersion = project.parchment_mappings_version
-        minecraftVersion = project.parchment_minecraft_version
-    }
-
-    mods {
-        "${mod_id}" {
-            sourceSet(sourceSets.main)
+repositories {
+    // mavenLocal() is intentionally absent, as on the NeoForge build: it takes
+    // precedence over remote repositories, so a stale or poisoned artifact in the
+    // local cache would silently enter the build.
+    mavenCentral()
+    // Modrinth Maven serves Litematica and malilib (the editor and its library).
+    exclusiveContent {
+        forRepository {
+            maven {
+                name = "Modrinth"
+                url = "https://api.modrinth.com/maven"
+            }
         }
+        filter { includeGroup "maven.modrinth" }
     }
 }
 
-// Include the official API client source directly in compilation.
-// The API client has zero MC dependencies and is bundled into the lib jar.
-// Source of truth: api-clients/java/ (separate public repo)
-sourceSets.main.java.srcDir '../../api-clients/java/src'
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
 
 dependencies {
+    // Fabric toolchain. Pinned exactly; see gradle.properties for the sources.
+    minecraft "com.mojang:minecraft:${minecraft_version}"
+    mappings "net.fabricmc:yarn:${yarn_mappings}:v2"
+    modImplementation "net.fabricmc:fabric-loader:${loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${fabric_version}"
+
+    // The official Schematicraft API client is compiled in by source include,
+    // exactly as on the NeoForge build. It has zero Minecraft dependencies and
+    // is part of the lib jar. Gson is bundled with Minecraft at runtime.
     compileOnly 'com.google.code.gson:gson:2.10.1'
     testImplementation 'com.google.code.gson:gson:2.10.1'
 }
 
-// The checks of the code with no Minecraft class in it, as plain programs
-// that throw on a failure, so the library takes no test framework.
+// Include the official API client source directly in compilation.
+// Source of truth: api-clients/java/ (separate public repo).
+sourceSets.main.java.srcDir '../../api-clients/java/src'
+
+// The checks of the code with no Minecraft class in it, as plain programs that
+// throw on a failure, so the library takes no test framework. Kept from the
+// NeoForge build; it needs no game.
 tasks.register('selfCheck', JavaExec) {
     description = 'Runs the library checks that need no game.'
     group = 'verification'
@@ -52,6 +58,31 @@ tasks.register('selfCheck', JavaExec) {
     mainClass = 'com.schematicraft.lib.core.IngameDownloadCheck'
 }
 tasks.named('check') { dependsOn 'selfCheck' }
+
+// Gradle 9 defaults the Test task's failOnNoDiscoveredTests to true. The lib's
+// src/test holds only the plain-main IngameDownloadCheck run by selfCheck (its
+// real verification), not a JUnit suite, so `build` (check -> test) would fail on
+// "no tests discovered". selfCheck is the gate; make test a no-op success. No
+// source change, jar unaffected. (Matches the NeoForge 26.1 p3d fix.)
+tasks.named('test', Test) {
+    failOnNoDiscoveredTests = false
+}
+
+processResources {
+    inputs.property "version", project.version
+    filesMatching("fabric.mod.json") {
+        expand "version": project.version
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    it.options.encoding = 'UTF-8'
+    it.options.release = 21
+}
+
+java {
+    withSourcesJar()
+}
 
 publishing {
     publications {
@@ -64,8 +95,4 @@ publishing {
             url "file://${project.projectDir}/repo"
         }
     }
-}
-
-tasks.withType(JavaCompile).configureEach {
-    options.encoding = 'UTF-8'
 }

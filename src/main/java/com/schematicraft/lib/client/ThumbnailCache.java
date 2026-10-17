@@ -1,10 +1,10 @@
 package com.schematicraft.lib.client;
 
-import com.mojang.blaze3d.platform.NativeImage;
+import net.minecraft.client.texture.NativeImage;
 import com.schematicraft.lib.config.ModConfig;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.texture.DynamicTexture;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.texture.NativeImageBackedTexture;
+import net.minecraft.util.Identifier;
 
 import javax.imageio.ImageIO;
 import javax.imageio.ImageReader;
@@ -100,12 +100,12 @@ public class ThumbnailCache {
 
     private ThumbnailCache() {}
 
-    private record CacheEntry(ResourceLocation location, int width, int height, long bytes) {}
+    private record CacheEntry(Identifier location, int width, int height, long bytes) {}
 
-    public ResourceLocation getTexture(String schematicId, String url) {
+    public Identifier getTexture(String schematicId, String url) {
         if (url == null || url.isEmpty()) return null;
 
-        ResourceLocation existing = lookup(schematicId);
+        Identifier existing = lookup(schematicId);
         if (existing != null) return existing;
 
         if (pendingMap.putIfAbsent(schematicId, true) == null) {
@@ -147,7 +147,7 @@ public class ThumbnailCache {
         });
     }
 
-    public ResourceLocation getLocalTexture(String key) {
+    public Identifier getLocalTexture(String key) {
         return lookup(key);
     }
 
@@ -156,7 +156,7 @@ public class ThumbnailCache {
      * and shutdown so user-derived images do not persist across sessions.
      */
     public void clear() {
-        List<ResourceLocation> toRelease;
+        List<Identifier> toRelease;
         synchronized (cacheLock) {
             toRelease = new ArrayList<>(cache.size());
             for (CacheEntry entry : cache.values()) {
@@ -169,7 +169,7 @@ public class ThumbnailCache {
         releaseAll(toRelease);
     }
 
-    private ResourceLocation lookup(String key) {
+    private Identifier lookup(String key) {
         synchronized (cacheLock) {
             CacheEntry entry = cache.get(key);
             return entry == null ? null : entry.location();
@@ -361,15 +361,15 @@ public class ThumbnailCache {
                     int g = (argb >> 8) & 0xFF;
                     int b = argb & 0xFF;
                     // NativeImage expects ABGR pixel order
-                    nativeImage.setPixelRGBA(x, y, (a << 24) | (b << 16) | (g << 8) | r);
+                    nativeImage.setColor(x, y, (a << 24) | (b << 16) | (g << 8) | r);
                 }
             }
 
-            Minecraft.getInstance().execute(() -> {
+            MinecraftClient.getInstance().execute(() -> {
                 try {
-                    DynamicTexture texture = new DynamicTexture(nativeImage);
-                    ResourceLocation loc = Minecraft.getInstance().getTextureManager()
-                            .register("schematicraft_thumb_" + key.replaceAll("[^a-zA-Z0-9_]", "_"), texture);
+                    NativeImageBackedTexture texture = new NativeImageBackedTexture(nativeImage);
+                    Identifier loc = MinecraftClient.getInstance().getTextureManager()
+                            .registerDynamicTexture("schematicraft_thumb_" + key.replaceAll("[^a-zA-Z0-9_]", "_"), texture);
                     put(key, loc, w, h);
                 } catch (Exception e) {
                     LOGGER.debug("Failed to register texture for {}: {}", key, e.getMessage());
@@ -415,9 +415,9 @@ public class ThumbnailCache {
     }
 
     /** Insert an entry and evict least recently used entries over budget. */
-    private void put(String key, ResourceLocation location, int width, int height) {
+    private void put(String key, Identifier location, int width, int height) {
         long bytes = (long) width * height * 4L;
-        List<ResourceLocation> evicted = new ArrayList<>();
+        List<Identifier> evicted = new ArrayList<>();
 
         synchronized (cacheLock) {
             CacheEntry previous = cache.put(key, new CacheEntry(location, width, height, bytes));
@@ -442,15 +442,15 @@ public class ThumbnailCache {
         releaseAll(evicted);
     }
 
-    private static void releaseAll(List<ResourceLocation> locations) {
+    private static void releaseAll(List<Identifier> locations) {
         if (locations.isEmpty()) {
             return;
         }
-        Minecraft client = Minecraft.getInstance();
+        MinecraftClient client = MinecraftClient.getInstance();
         client.execute(() -> {
-            for (ResourceLocation location : locations) {
+            for (Identifier location : locations) {
                 try {
-                    client.getTextureManager().release(location);
+                    client.getTextureManager().destroyTexture(location);
                 } catch (Exception e) {
                     LOGGER.debug("Failed to release texture: {}", e.getMessage());
                 }
