@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "schematicraft_lib",
+  "version": "${version}",
+  "name": "Schematicraft Lib",
+  "description": "Shared library for Schematicraft editor integrations. Provides API client, library browsing, and UI components.",
+  "authors": ["Schematicraft"],
+  "license": "LGPL-3.0",
+  "environment": "*",
+  "depends": {
+    "fabricloader": ">=0.16",
+    "minecraft": "1.21.1",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
