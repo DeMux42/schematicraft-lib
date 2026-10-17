@@ -5,10 +5,12 @@ import com.schematicraft.lib.client.CameraMode;
 import com.schematicraft.lib.core.LibraryState;
 import com.schematicraft.lib.network.SchematiCraftAPIWrapper;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.input.KeyEvent;
+import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
 import org.lwjgl.glfw.GLFW;
 import org.slf4j.Logger;
@@ -243,20 +245,20 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
     }
 
     @Override
-    public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+    public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
         graphics.fill(0, 0, this.width, this.height, GuiColors.SCREEN_BG);
 
         graphics.fill(0, 0, this.width, 30, GuiColors.PANEL_BG);
         graphics.fill(0, 29, this.width, 30, GuiColors.BORDER_SEPARATOR);
-        graphics.drawString(this.font, "Upload from " + source.displayName(), 8, 6,
+        graphics.text(this.font, "Upload from " + source.displayName(), 8, 6,
                 GuiColors.SELECTED, false);
-        graphics.drawString(this.font, "Shared publicly only if you choose to on the website",
+        graphics.text(this.font, "Shared publicly only if you choose to on the website",
                 8, 18, GuiColors.TEXT_DIM, false);
 
-        super.render(graphics, mouseX, mouseY, partialTick);
+        super.extractRenderState(graphics, mouseX, mouseY, partialTick);
 
         if (!statusText.isEmpty()) {
-            graphics.drawCenteredString(this.font, statusText,
+            graphics.centeredText(this.font, statusText,
                     this.width / 2, this.height - 30, statusColor);
         }
 
@@ -302,20 +304,19 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
         return rows;
     }
 
-    private void renderDropdown(GuiGraphics graphics, int mouseX, int mouseY) {
+    private void renderDropdown(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
         if (!dropdownOpen) return;
 
         List<String> rows = dropdownRows();
         int visible = Math.min(rows.size(), DROP_MAX_ROWS);
         int h = visible * DROP_ROW_H + 2;
 
-        // Text is batched and flushed at the end of the frame, so button labels
-        // drawn earlier would otherwise appear on top of this panel even though it
-        // is drawn later. Flush the pending text, then raise the Z layer so both
-        // the panel and its own text sit above the form.
-        graphics.flush();
-        graphics.pose().pushPose();
-        graphics.pose().translate(0, 0, 300);
+        // 26.1 replaced per-frame text batching + Z-translation with GUI strata:
+        // nextStratum() moves subsequent draws onto a higher layer, so the panel
+        // and its rows sit above the form drawn earlier this frame. This replaces
+        // the old graphics.flush() + pose().translate(0,0,300) pattern (flush() is
+        // gone and pose() is now a 2D matrix stack with no Z axis).
+        graphics.nextStratum();
 
         // Opaque so the form behind it does not bleed through the list.
         graphics.fill(dropdownX, dropdownY, dropdownX + FIELD_W, dropdownY + h,
@@ -338,26 +339,21 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
 
             int color = isCreateRow ? GuiColors.INFO
                     : (isSelected ? GuiColors.SELECTED : GuiColors.TEXT_PRIMARY);
-            graphics.drawString(this.font, rows.get(rowIdx),
+            graphics.text(this.font, rows.get(rowIdx),
                     dropdownX + 4, rowY + 3, color, false);
         }
 
         if (rows.size() > DROP_MAX_ROWS) {
-            graphics.drawString(this.font, "\u00a78scroll",
+            graphics.text(this.font, "\u00a78scroll",
                     dropdownX + FIELD_W - 30, dropdownY + h - 10, GuiColors.TEXT_DIM, false);
         }
-
-        // Flush while still translated so this panel's text lands on the raised
-        // layer rather than being deferred back down to the default one.
-        graphics.flush();
-        graphics.pose().popPose();
     }
 
     private static boolean isOver(int mouseX, int mouseY, int x, int y, int w, int h) {
         return mouseX >= x && mouseX < x + w && mouseY >= y && mouseY < y + h;
     }
 
-    private static void drawBorder(GuiGraphics graphics, int x, int y, int w, int h, int color) {
+    private static void drawBorder(GuiGraphicsExtractor graphics, int x, int y, int w, int h, int color) {
         graphics.fill(x, y, x + w, y + 1, color);
         graphics.fill(x, y + h - 1, x + w, y + h, color);
         graphics.fill(x, y, x + 1, y + h, color);
@@ -365,7 +361,9 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
     }
 
     @Override
-    public boolean mouseClicked(double mouseX, double mouseY, int button) {
+    public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
+        double mouseX = event.x();
+        double mouseY = event.y();
         if (dropdownOpen) {
             List<String> rows = dropdownRows();
             int visible = Math.min(rows.size(), DROP_MAX_ROWS);
@@ -391,7 +389,7 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
             setDropdownOpen(false);
             return true;
         }
-        return super.mouseClicked(mouseX, mouseY, button);
+        return super.mouseClicked(event, doubleClick);
     }
 
     @Override
@@ -431,12 +429,13 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
     }
 
     @Override
-    public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+    public void extractBackground(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
         // Skip default
     }
 
     @Override
-    public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+    public boolean keyPressed(KeyEvent event) {
+        int keyCode = event.key();
         if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
             Minecraft.getInstance().setScreen(new LibraryScreen(journey));
             return true;
@@ -447,7 +446,7 @@ public class UploadScreen extends Screen implements SchematicraftScreen {
             doUpload();
             return true;
         }
-        return super.keyPressed(keyCode, scanCode, modifiers);
+        return super.keyPressed(event);
     }
 
     @Override

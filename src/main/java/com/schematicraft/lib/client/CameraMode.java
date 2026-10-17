@@ -1,17 +1,17 @@
 package com.schematicraft.lib.client;
 
 import com.mojang.blaze3d.pipeline.RenderTarget;
-import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.logging.LogUtils;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.Screenshot;
 import net.minecraft.client.gui.Font;
-import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.input.KeyEvent;
 import net.neoforged.neoforge.client.event.InputEvent;
 import net.neoforged.neoforge.client.event.RenderGuiLayerEvent;
 import net.neoforged.neoforge.common.NeoForge;
 import org.slf4j.Logger;
 
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
@@ -103,7 +103,7 @@ public class CameraMode {
         boolean inCooldown = (System.currentTimeMillis() - lastCaptureTimeMs) < CAPTURE_COOLDOWN_MS;
 
         Minecraft mc = Minecraft.getInstance();
-        GuiGraphics g = event.getGuiGraphics();
+        GuiGraphicsExtractor g = event.getGuiGraphics();
         Font font = mc.font;
         int w = mc.getWindow().getGuiScaledWidth();
         int h = mc.getWindow().getGuiScaledHeight();
@@ -135,7 +135,7 @@ public class CameraMode {
 
             // "Captured!" text during flash
             if (flashTimer > FLASH_DURATION_TICKS / 2) {
-                g.drawCenteredString(font, "\u00a7aCaptured!", w / 2, h / 2 - 4, 0xFFFFFF);
+                g.centeredText(font, "\u00a7aCaptured!", w / 2, h / 2 - 4, 0xFFFFFF);
             }
         }
 
@@ -151,14 +151,14 @@ public class CameraMode {
         } else {
             msg = "\u00a7a" + captureCount + "/" + MAX_IMAGES + "  \u00a78|\u00a77  Click for more  \u00a78|\u00a77  Esc to finish";
         }
-        g.drawCenteredString(font, msg, w / 2, h - 18, 0xFFFFFF);
+        g.centeredText(font, msg, w / 2, h - 18, 0xFFFFFF);
 
         // Count badge
         if (captureCount > 0) {
             String badge = "\u00a7a\u2713 " + captureCount;
             int bw = font.width(badge) + 8;
             g.fill(w - bw - 4, 4, w - 4, 18, 0x80000000);
-            g.drawString(font, badge, w - bw, 6, 0xFFFFFF);
+            g.text(font, badge, w - bw, 6, 0xFFFFFF);
         }
     }
 
@@ -187,22 +187,30 @@ public class CameraMode {
         try {
             Minecraft mc = Minecraft.getInstance();
             RenderTarget fb = mc.getMainRenderTarget();
-            NativeImage image = new NativeImage(fb.width, fb.height, false);
-            fb.bindRead();
-            image.downloadTexture(0, false);
-            fb.unbindRead();
-            image.flipY();
+            // 26.1 removed the synchronous RenderTarget#bindRead +
+            // NativeImage#downloadTexture framebuffer readback. Screenshot.takeScreenshot
+            // performs the GPU readback (including the Y-flip) and hands back a ready
+            // NativeImage in the callback; we then write it to our own directory. The
+            // callback runs on the render thread after the current frame, which is the
+            // clean frame we scheduled this capture for.
+            Screenshot.takeScreenshot(fb, image -> {
+                try {
+                    Path dir = Path.of("schematicraft_screenshots");
+                    java.nio.file.Files.createDirectories(dir);
+                    Path out = dir.resolve("sc_" + System.currentTimeMillis() + ".png");
+                    image.writeToFile(out);
+                    int iw = image.getWidth();
+                    int ih = image.getHeight();
+                    image.close();
 
-            Path dir = Path.of("schematicraft_screenshots");
-            Files.createDirectories(dir);
-            Path out = dir.resolve("sc_" + System.currentTimeMillis() + ".png");
-            image.writeToFile(out);
-            image.close();
-
-            capturedImages.add(out);
-            captureCount++;
-            flashTimer = FLASH_DURATION_TICKS;
-            LOGGER.info("Captured: {} ({}x{})", out.getFileName(), fb.width, fb.height);
+                    capturedImages.add(out);
+                    captureCount++;
+                    flashTimer = FLASH_DURATION_TICKS;
+                    LOGGER.info("Captured: {} ({}x{})", out.getFileName(), iw, ih);
+                } catch (Exception e) {
+                    LOGGER.error("Capture failed: {}", e.getMessage());
+                }
+            });
         } catch (Exception e) {
             LOGGER.error("Capture failed: {}", e.getMessage());
         }

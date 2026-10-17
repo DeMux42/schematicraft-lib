@@ -2,9 +2,10 @@ package com.schematicraft.lib.client.gui;
 
 import com.schematicraft.lib.core.IngameDownload;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.input.KeyEvent;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.FormattedCharSequence;
 import org.lwjgl.glfw.GLFW;
@@ -66,35 +67,35 @@ public class ConfirmLossScreen extends Screen implements SchematicraftScreen {
     }
 
     @Override
-    public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+    public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
         graphics.fill(0, 0, this.width, this.height, GuiColors.SCREEN_BG);
         int centerX = this.width / 2;
         int y = top;
-        graphics.drawCenteredString(this.font, this.title, centerX, y, GuiColors.TEXT_PRIMARY);
+        graphics.centeredText(this.font, this.title, centerX, y, GuiColors.TEXT_PRIMARY);
         y += 20;
         for (String line : loss.lostLines()) {
-            graphics.drawCenteredString(this.font, line, centerX, y, GuiColors.WARNING);
+            graphics.centeredText(this.font, line, centerX, y, GuiColors.WARNING);
             y += LINE_H;
         }
         for (FormattedCharSequence note : notes) {
-            graphics.drawCenteredString(this.font, note, centerX, y, GuiColors.TEXT_SECONDARY);
+            graphics.centeredText(this.font, note, centerX, y, GuiColors.TEXT_SECONDARY);
             y += LINE_H;
         }
-        super.render(graphics, mouseX, mouseY, partialTick);
+        super.extractRenderState(graphics, mouseX, mouseY, partialTick);
     }
 
     @Override
-    public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+    public void extractBackground(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
         // Skip default
     }
 
     @Override
-    public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
-        if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
+    public boolean keyPressed(KeyEvent event) {
+        if (event.key() == GLFW.GLFW_KEY_ESCAPE) {
             cancel();
             return true;
         }
-        return super.keyPressed(keyCode, scanCode, modifiers);
+        return super.keyPressed(event);
     }
 
     @Override

@@ -192,7 +192,7 @@ public class SchematiCraftAPIWrapper {
     @javax.annotation.Nullable
     private static String gameRelease() {
         return IngameDownload.release(
-                net.minecraft.SharedConstants.getCurrentVersion().getName());
+                net.minecraft.SharedConstants.getCurrentVersion().name());
     }
 
     /**

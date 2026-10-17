@@ -47,33 +47,38 @@ public class PreviewDataParser {
             }
 
             String snbt = root.get("statePosArrayList").getAsString();
-            CompoundTag nbt = TagParser.parseTag(snbt);
+            // 26.1 renamed TagParser.parseTag(String) to parseCompoundFully(String).
+            CompoundTag nbt = TagParser.parseCompoundFully(snbt);
 
-            // Parse blockstatemap (palette)
-            ListTag paletteList = nbt.getList("blockstatemap", Tag.TAG_COMPOUND);
+            // Parse blockstatemap (palette). 26.1 CompoundTag/ListTag accessors
+            // return Optional; getList no longer takes an element-type arg, and
+            // getCompoundOrEmpty gives the pre-26.1 "empty when absent" behaviour.
+            ListTag paletteList = nbt.getList("blockstatemap").orElse(new ListTag());
             List<BlockState> palette = new ArrayList<>();
             for (int i = 0; i < paletteList.size(); i++) {
-                CompoundTag entry = paletteList.getCompound(i);
+                CompoundTag entry = paletteList.getCompoundOrEmpty(i);
                 BlockState state = parseBlockState(entry);
                 palette.add(state);
             }
 
             // Parse statelist (positions + palette indices)
-            ListTag stateList = nbt.getList("statelist", Tag.TAG_COMPOUND);
+            ListTag stateList = nbt.getList("statelist").orElse(new ListTag());
             List<PreviewBlockData.BlockEntry> blocks = new ArrayList<>();
 
             int minX = Integer.MAX_VALUE, minY = Integer.MAX_VALUE, minZ = Integer.MAX_VALUE;
             int maxX = Integer.MIN_VALUE, maxY = Integer.MIN_VALUE, maxZ = Integer.MIN_VALUE;
 
             for (int i = 0; i < stateList.size(); i++) {
-                CompoundTag entry = stateList.getCompound(i);
+                CompoundTag entry = stateList.getCompoundOrEmpty(i);
 
                 // Position
                 int[] pos;
                 if (entry.contains("pos")) {
                     var posTag = entry.get("pos");
                     if (posTag instanceof ListTag posList) {
-                        pos = new int[]{posList.getInt(0), posList.getInt(1), posList.getInt(2)};
+                        pos = new int[]{posList.getInt(0).orElse(0),
+                                posList.getInt(1).orElse(0),
+                                posList.getInt(2).orElse(0)};
                     } else {
                         continue;
                     }
@@ -82,7 +87,7 @@ public class PreviewDataParser {
                 }
 
                 // State index
-                int stateIdx = entry.getInt("state");
+                int stateIdx = entry.getIntOr("state", 0);
                 if (stateIdx < 0 || stateIdx >= palette.size()) continue;
 
                 BlockState state = palette.get(stateIdx);
@@ -147,16 +152,16 @@ public class PreviewDataParser {
      * Format: {Name:"minecraft:stone", Properties:{variant:"smooth"}}
      */
     private static BlockState parseBlockState(CompoundTag entry) {
-        String name = entry.getString("Name");
+        String name = entry.getStringOr("Name", "");
         if (name.isEmpty()) return Blocks.AIR.defaultBlockState();
 
-        Block block = BuiltInRegistries.BLOCK.get(
-                net.minecraft.resources.ResourceLocation.tryParse(name));
+        Block block = BuiltInRegistries.BLOCK.getValue(
+                net.minecraft.resources.Identifier.tryParse(name));
         if (block == null || block == Blocks.AIR) {
             // Try without namespace
             if (!name.contains(":")) {
-                block = BuiltInRegistries.BLOCK.get(
-                        net.minecraft.resources.ResourceLocation.tryParse("minecraft:" + name));
+                block = BuiltInRegistries.BLOCK.getValue(
+                        net.minecraft.resources.Identifier.tryParse("minecraft:" + name));
             }
             if (block == null) return Blocks.AIR.defaultBlockState();
         }
@@ -164,10 +169,11 @@ public class PreviewDataParser {
         BlockState state = block.defaultBlockState();
 
         // Apply properties if present
-        if (entry.contains("Properties", Tag.TAG_COMPOUND)) {
-            CompoundTag props = entry.getCompound("Properties");
-            for (String key : props.getAllKeys()) {
-                String value = props.getString(key);
+        var propsOpt = entry.getCompound("Properties");
+        if (propsOpt.isPresent()) {
+            CompoundTag props = propsOpt.get();
+            for (String key : props.keySet()) {
+                String value = props.getStringOr(key, "");
                 var property = block.getStateDefinition().getProperty(key);
                 if (property != null) {
                     state = applyProperty(state, property, value);
@@ -183,8 +189,8 @@ public class PreviewDataParser {
      * where applicable.
      */
     private static BlockState resolveBlockState(String blockName, BlockState original) {
-        Block block = BuiltInRegistries.BLOCK.get(
-                net.minecraft.resources.ResourceLocation.tryParse(blockName));
+        Block block = BuiltInRegistries.BLOCK.getValue(
+                net.minecraft.resources.Identifier.tryParse(blockName));
         if (block == null || block == Blocks.AIR) return original;
 
         BlockState state = block.defaultBlockState();

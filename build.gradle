@@ -8,7 +8,6 @@ version = mod_version
 group = mod_group_id
 
 repositories {
-    mavenLocal()
     mavenCentral()
 }
 
@@ -16,15 +15,11 @@ base {
     archivesName = mod_id
 }
 
-java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+// NeoForge 26.1 (Minecraft 26.1) runs on Java 25.
+java.toolchain.languageVersion = JavaLanguageVersion.of(25)
 
 neoForge {
     version = project.neo_version
-
-    parchment {
-        mappingsVersion = project.parchment_mappings_version
-        minecraftVersion = project.parchment_minecraft_version
-    }
 
     mods {
         "${mod_id}" {
@@ -52,6 +47,16 @@ tasks.register('selfCheck', JavaExec) {
     mainClass = 'com.schematicraft.lib.core.IngameDownloadCheck'
 }
 tasks.named('check') { dependsOn 'selfCheck' }
+
+// The library's verification is selfCheck (plain programs that throw), not a
+// JUnit suite: src/test holds IngameDownloadCheck's main, not test cases.
+// Gradle 9 made the standard `test` task fail when it finds test sources but
+// discovers no JUnit tests, so a plain `gradlew build`/`gradlew test` would
+// fail here even though selfCheck is green. Opt this module out of that check,
+// which keeps `test` a no-op success and leaves selfCheck as the real gate.
+tasks.named('test', Test) {
+    failOnNoDiscoveredTests = false
+}
 
 publishing {
     publications {
