@@ -1,5 +1,7 @@
 <a id="readme-top"></a>
 
+<!-- Structure adapted from othneildrew/Best-README-Template, credited in Acknowledgments. -->
+
 <div align="center">
 
 # Schematicraft Lib
@@ -19,10 +21,15 @@ Editor-agnostic Minecraft client library for [Schematicraft](https://schematicra
 
 - [About The Project](#about-the-project)
   - [What It Provides](#what-it-provides)
+  - [Built With](#built-with)
 - [Design Rules](#design-rules)
 - [Getting Started](#getting-started)
-- [Writing An Integration](#writing-an-integration)
+- [Writing An Integration](#writing-an-integration) (usage)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
 - [License](#license)
+- [Contact](#contact)
+- [Acknowledgments](#acknowledgments)
 
 </details>
 
@@ -49,6 +56,20 @@ Reference consumer: [schematicraft-mod](https://github.com/DeMux42/schematicraft
 | Config               | API key and endpoint storage, with endpoint validation                                       |
 | Server detection     | Whether the server also has a Schematicraft mod installed                                    |
 
+### Built With
+
+[![Java][java-shield]][java-url]
+[![NeoForge][neoforge-shield]][neoforge-url]
+[![Gradle][gradle-shield]][gradle-url]
+
+- Java 21, set by the Gradle toolchain.
+- NeoForge 21.1.77 for Minecraft 1.21.1, through ModDevGradle 2.0.141, with Parchment mappings 2024.11.17.
+- Gradle 8.10.2, through the wrapper.
+- Gson 2.10.1, at compile time only, because Minecraft ships it.
+- The Java client from [schematicraft-api](https://github.com/DeMux42/schematicraft-api), compiled in from source.
+
+<p align="right"><a href="#readme-top">Back to top</a></p>
+
 ## Design Rules
 
 These are not style preferences. Breaking them breaks consumers.
@@ -61,9 +82,11 @@ These are not style preferences. Breaking them breaks consumers.
 
 **Credentials never leave config.** The API key is read through `ModConfig`, never logged, never pre-filled into a text field, and never included in an error message.
 
+<p align="right"><a href="#readme-top">Back to top</a></p>
+
 ## Getting Started
 
-There is nothing to build here. This repository has no Gradle build of its own; the editor mod compiles these sources as part of its own source set. Build the editor mod instead.
+To get something you can run, build the editor mod. It compiles these sources as part of its own source set. This repository's own `build.gradle` only compiles the library and runs `selfCheck`, and it reads the API client from the same relative path.
 
 `SchematiCraftAPIWrapper` imports `com.schematicraft.api.SchematiCraftAPI`, so the [API client](https://github.com/DeMux42/schematicraft-api) has to be present as well. The editor mod resolves all three at fixed relative paths, so the layout matters:
 
@@ -90,6 +113,8 @@ None of the source directory links are version pinned, so keep all three reposit
 
 Longer term this should ship as a versioned Jar-in-Jar artifact rather than a source directory. It is a source directory today because there is one consumer.
 
+<p align="right"><a href="#readme-top">Back to top</a></p>
+
 ## Writing An Integration
 
 1. Depend on this library and add its source directory to your source set.
@@ -100,9 +125,65 @@ Longer term this should ship as a versioned Jar-in-Jar artifact rather than a so
 
 Conversion is server side, so an integration reuses an existing format and editor pair. Adding a genuinely new format also needs parser and enum work on the backend.
 
+<p align="right"><a href="#readme-top">Back to top</a></p>
+
+## Roadmap
+
+- [x] Library grid with bundle tabs, search, and a 3D preview
+- [x] Upload, new bundle, palette picker and API key screens
+- [x] Camera mode
+- [x] Discover, a paged search of public schematics kept apart from the personal library
+- [x] Load limits each editor declares, for block count and download size
+- [x] Byte-bounded thumbnail and schematic caches
+- [x] The game's release sent with each download, and a prompt before a download loses content
+- [x] Ports to Forge 1.20.1, NeoForge 26.1 and Fabric 1.21.1, each on its own branch
+- [ ] The interactive 3D preview on the NeoForge 26.1 and Fabric 1.21.1 branches, which show the static thumbnail for now
+- [ ] A versioned Jar-in-Jar artifact in place of the source directory
+
+See [open issues][issues-url] for anything reported since.
+
+<p align="right"><a href="#readme-top">Back to top</a></p>
+
+## Contributing
+
+Issues and pull requests are welcome.
+
+1. Fork the repository
+2. Create a branch (`git checkout -b feature/thing`)
+3. Commit your changes
+4. Push and open a pull request
+
+The [Design Rules](#design-rules) are the project rules. A change that breaks one breaks consumers.
+
+`master` is the NeoForge 1.21.1 build. The other ports live on the `forge/1.20.1`, `neoforge/26.1` and `fabric/1.21.1` branches, so open a pull request against the branch for the loader and version you changed.
+
+`build.gradle` registers a `selfCheck` task, which `check` and `build` also run. It runs the checks that need no game, in `src/test`, with no test framework. Run it from the workspace layout in [Getting Started](#getting-started) before you open a pull request:
+
+```sh
+./gradlew selfCheck
+```
+
+<p align="right"><a href="#readme-top">Back to top</a></p>
+
 ## License
 
 Distributed under the GNU Lesser General Public License v3.0. See [`LICENSE`](LICENSE) for the LGPL terms and [`COPYING`](COPYING) for the GPL terms it builds on.
+
+<p align="right"><a href="#readme-top">Back to top</a></p>
+
+## Contact
+
+DeMux - [@DeMux42](https://github.com/DeMux42)
+
+Project link: [https://github.com/DeMux42/schematicraft-lib](https://github.com/DeMux42/schematicraft-lib)
+
+<p align="right"><a href="#readme-top">Back to top</a></p>
+
+## Acknowledgments
+
+- [NeoForge](https://neoforged.net/) and [Parchment](https://parchmentmc.org/)
+- [Best-README-Template](https://github.com/othneildrew/Best-README-Template) by othneildrew, for this README's structure.
+- [Shields.io](https://shields.io) for the badges.
 
 <p align="right"><a href="#readme-top">Back to top</a></p>
 
@@ -113,3 +194,7 @@ Distributed under the GNU Lesser General Public License v3.0. See [`LICENSE`](LI
 [java-shield]: https://img.shields.io/badge/Java-21-red.svg
 [java-url]: https://adoptium.net/
 [issues-url]: https://github.com/DeMux42/schematicraft-lib/issues
+[neoforge-shield]: https://img.shields.io/badge/NeoForge-21.1-orange.svg
+[neoforge-url]: https://neoforged.net/
+[gradle-shield]: https://img.shields.io/badge/Gradle-8.10-02303A.svg
+[gradle-url]: https://gradle.org/
